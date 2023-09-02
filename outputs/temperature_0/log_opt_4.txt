@@ -1,0 +1,38 @@
+[2023-09-02 13:08:21,391] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:04<00:08,  4.10s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:08<00:04,  4.22s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.31s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.54s/it]
+Target Model - facebook/opt-13b
+Draft Model - facebook/opt-1.3b
+************
+
+HF's generate
+Count of new tokens: 82
+</s>At the county fair, Tom won a goldfish that seemed to have an uncanny ability.
+It would swim up to the surface of the water, and then it would swim back down.
+It did this over and over again.
+Tom was amazed.
+He asked the fair worker how the fish did this.
+The worker said, "It's a magic fish.
+It's a magic fish
+******
+Naive Autoregressive with temperature
+Count of new tokens: 64
+</s>At the county fair, Tom won a goldfish that seemed to have an uncanny ability.
+It would swim up to the surface of the water, and then it would swim back down.
+It did this over and over again.
+Tom was amazed.
+He asked the fair worker how the fish did this.
+******
+Speculative Sampling with temperature
+Count of new tokens: 63
+</s>At the county fair, Tom won a goldfish that seemed to have an uncanny ability.
+It would swim up to the surface of the water, and then it would swim back down.
+It did this over and over again.
+Tom was amazed.
+He asked the fair worker how the fish did this
+******
+Benchmarking naive Autoregressive Sampling...
+  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:05<00:58,  5.86s/it] 18%|█▊        | 2/11 [00:11<00:50,  5.61s/it] 27%|██▋       | 3/11 [00:16<00:43,  5.40s/it] 36%|███▋      | 4/11 [00:21<00:36,  5.25s/it] 45%|████▌     | 5/11 [00:26<00:31,  5.22s/it] 55%|█████▍    | 6/11 [00:31<00:25,  5.17s/it] 64%|██████▎   | 7/11 [00:36<00:20,  5.12s/it] 73%|███████▎  | 8/11 [00:41<00:15,  5.13s/it] 82%|████████▏ | 9/11 [00:47<00:10,  5.16s/it] 91%|█████████ | 10/11 [00:52<00:05,  5.21s/it]100%|██████████| 11/11 [00:57<00:00,  5.12s/it]100%|██████████| 11/11 [00:57<00:00,  5.21s/it]
+Time per token (Autoregressive Sampling): 11.89 tok/s
+Benchmarking Speculative Sampling...
+  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:04<00:42,  4.21s/it] 18%|█▊        | 2/11 [00:07<00:34,  3.86s/it] 27%|██▋       | 3/11 [00:11<00:30,  3.84s/it] 36%|███▋      | 4/11 [00:15<00:26,  3.81s/it] 45%|████▌     | 5/11 [00:18<00:20,  3.41s/it] 55%|█████▍    | 6/11 [00:20<00:15,  3.18s/it] 64%|██████▎   | 7/11 [00:24<00:12,  3.20s/it] 73%|███████▎  | 8/11 [00:27<00:09,  3.30s/it] 82%|████████▏ | 9/11 [00:30<00:06,  3.03s/it] 91%|█████████ | 10/11 [00:32<00:02,  2.99s/it]100%|██████████| 11/11 [00:35<00:00,  2.82s/it]100%|██████████| 11/11 [00:35<00:00,  3.21s/it]
+Time per token (Speculative Sampling): 20.20 tok/s

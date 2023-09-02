@@ -1,0 +1,36 @@
+[2023-09-02 12:46:00,854] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:03<00:07,  3.98s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:08<00:04,  4.16s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.30s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.51s/it]
+Target Model - facebook/opt-13b
+Draft Model - facebook/opt-1.3b
+************
+
+HF's generate
+Count of new tokens: 79
+</s>The key to the mysterious chest had been missing for generations, until today.
+
+The chest, which was found in the basement of a house in the town of Krasnoyarsk, Russia, was opened by a group of archaeologists from the Siberian Branch of the Russian Academy of Sciences.
+
+The chest was found in the basement of a house in the town of Krasn
+******
+Naive Autoregressive with temperature
+Count of new tokens: 64
+</s>The key to the mysterious chest had been missing for generations, until today.
+
+The chest, which was found in the basement of a house in the town of Krasnoyarsk, Russia, was opened by a group of archaeologists from the Siberian Branch of the Russian Academy of Sciences.
+
+The chest
+******
+Speculative Sampling with temperature
+Count of new tokens: 63
+</s>The key to the mysterious chest had been missing for generations, until today.
+
+The chest, which was found in the basement of a house in the town of Krasnoyarsk, Russia, was opened by a group of archaeologists from the Siberian Branch of the Russian Academy of Sciences.
+
+The
+******
+Benchmarking naive Autoregressive Sampling...
+  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:05<01:04,  5.86s/it] 17%|█▋        | 2/12 [00:11<00:54,  5.49s/it] 25%|██▌       | 3/12 [00:16<00:48,  5.40s/it] 33%|███▎      | 4/12 [00:21<00:41,  5.22s/it] 42%|████▏     | 5/12 [00:25<00:34,  4.96s/it] 50%|█████     | 6/12 [00:30<00:29,  4.93s/it] 58%|█████▊    | 7/12 [00:35<00:24,  4.88s/it] 67%|██████▋   | 8/12 [00:40<00:19,  4.85s/it] 75%|███████▌  | 9/12 [00:44<00:14,  4.81s/it] 83%|████████▎ | 10/12 [00:49<00:09,  4.83s/it] 92%|█████████▏| 11/12 [00:54<00:04,  4.75s/it]100%|██████████| 12/12 [00:59<00:00,  4.92s/it]100%|██████████| 12/12 [00:59<00:00,  4.98s/it]
+Time per token (Autoregressive Sampling): 12.46 tok/s
+Benchmarking Speculative Sampling...
+  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:04<00:46,  4.20s/it] 17%|█▋        | 2/12 [00:06<00:32,  3.29s/it] 25%|██▌       | 3/12 [00:10<00:30,  3.43s/it] 33%|███▎      | 4/12 [00:13<00:25,  3.13s/it] 42%|████▏     | 5/12 [00:15<00:19,  2.72s/it] 50%|█████     | 6/12 [00:19<00:19,  3.21s/it] 58%|█████▊    | 7/12 [00:21<00:13,  2.79s/it] 67%|██████▋   | 8/12 [00:23<00:10,  2.70s/it] 75%|███████▌  | 9/12 [00:26<00:07,  2.66s/it] 83%|████████▎ | 10/12 [00:28<00:05,  2.56s/it] 92%|█████████▏| 11/12 [00:31<00:02,  2.54s/it]100%|██████████| 12/12 [00:33<00:00,  2.53s/it]100%|██████████| 12/12 [00:33<00:00,  2.80s/it]
+Time per token (Speculative Sampling): 23.01 tok/s
