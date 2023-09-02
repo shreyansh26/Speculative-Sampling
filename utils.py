@@ -1,7 +1,7 @@
 import torch
 
 def get_distribution(logits, temperature):
-    probs = torch.softmax(logits / temperature, dim=-1)
+    probs = torch.softmax(logits / (temperature + 1e-10), dim=-1)
     return probs
 
 def sample(logits, temperature):
