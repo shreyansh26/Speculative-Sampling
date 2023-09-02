@@ -28,23 +28,7 @@ tokenizer = AutoTokenizer.from_pretrained(
   cache_dir="./opt-13b",
 )
 
-# target_model = GPTNeoXForCausalLM.from_pretrained(
-#   "EleutherAI/pythia-410m",
-#   cache_dir="./pythia-410m",
-# ).to(device)
-
-# draft_model = GPTNeoXForCausalLM.from_pretrained(
-#   "EleutherAI/pythia-160m",
-#   cache_dir="./pythia-160m",
-# ).to(device)
-
-# tokenizer = AutoTokenizer.from_pretrained(
-#   "EleutherAI/pythia-410m",
-#   cache_dir="./pythia-410m",
-# )
-
-
-texts = [
+prompts_sample_1 = [
     'What did Rutherford discover?\n',
     'The key to the mysterious chest had been missing for generations, until today.',
     'When the rain started falling upwards, Lily knew something was terribly wrong.',
@@ -59,8 +43,24 @@ texts = [
     'These shorter beginnings should still provide a great foundation for your storytelling prompts.'
   ]
 
+prompts_sample_2 = [
+    'What did Rutherford discover?\n',
+    "Emily found a mysterious letter on her doorstep one sunny morning.",
+    "On a rainy afternoon, Max stumbled upon an old treasure map in the attic.",
+    "A friendly stray cat showed up at Lisa's doorstep, leading her to a hidden garden.",
+    "Jake's new neighbor had a strange habit of disappearing into the woods every night.",
+    "While cleaning out the garage, Mia discovered a box of her grandfather's old inventions.",
+    "At the county fair, Tom won a goldfish that seemed to have an uncanny ability.",
+    "Amelia woke up one day to find her bedroom ceiling covered in glowing stars.",
+    "In a dusty antique shop, Sarah found a vintage camera with peculiar abilities.",
+    "During a family camping trip, they stumbled upon an unusual rock formation.",
+    "A peculiar antique shop opened in town, and its owner seemed to know everyone's deepest secrets."
+  ]
+
+texts = prompts_sample_1
+
 MAX_NEW_TOKENS = 64
-TEMPERATURE = 0 # Deterministic
+TEMPERATURE = 0 # 0 for Deterministic
 
 print("Target Model -", target_model.config._name_or_path)
 print("Draft Model -", draft_model.config._name_or_path)
