@@ -41,20 +41,17 @@ Results showing the speedup (as ratio) of speculative sampling over naive autore
 **Target Model - facebook/opt-13b**  
 **Draft Model - facebook/opt-1.3b**
 
-| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |   |
-|-------------------|-----------------|-----------------|-----------------|---|
-| Temperature = 0   | 1.83            | 1.73            | 1.78            |   |
-| Temperature = 0.5 | 1.68            | 1.81            | 1.75            |   |
-|                   |                 |                 |                 |   |
+| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
+|-------------------|-----------------|-----------------|-----------------|
+| Temperature = 0   | 1.83            | 1.73            | 1.78            |
+| Temperature = 0.5 | 1.68            | 1.81            | 1.75            |
 
 **Target Model - facebook/opt-6.7b**  
 **Draft Model - facebook/opt-1.3b**
 
-| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |   |
-|-------------------|-----------------|-----------------|-----------------|---|
-| Temperature = 0   | 1.55            | 1.38            | 1.46            |   |
-| Temperature = 0.5 | 1.53            | 1.49            | 1.51            |   |
-|                   |                 |                 |                 |   |
-
+| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
+|-------------------|-----------------|-----------------|-----------------|
+| Temperature = 0   | 1.55            | 1.38            | 1.46            |
+| Temperature = 0.5 | 1.53            | 1.49            | 1.51            |
 
 The speedup ratio seems to increase as the target model size increases (and draft model is also relatively big enough). So, the speedup ratio of 2-2.5x mentioned in the Deepmind paper, could also be true for a 70B target model and a 7B draft model (which they use).
