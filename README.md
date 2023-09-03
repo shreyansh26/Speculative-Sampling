@@ -36,18 +36,18 @@ python benchmark.py
 
 ## Results
 
-Results showing the speedup (as ratio) of speculative sampling over naive autoregressive sampling.
+Results showing the speedup (as ratio) of speculative sampling over naive autoregressive sampling. These results are from different benchmarking runs and the logs can be found in the [outputs](outputs/) directory.
 
-**Target Model - facebook/opt-13b**  
-**Draft Model - facebook/opt-1.3b**
+**Target Model - `facebook/opt-13b`**  
+**Draft Model - `facebook/opt-1.3b`**
 
 | Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
 |-------------------|-----------------|-----------------|-----------------|
 | Temperature = 0   | 1.83            | 1.73            | 1.78            |
 | Temperature = 0.5 | 1.68            | 1.81            | 1.75            |
 
-**Target Model - facebook/opt-6.7b**  
-**Draft Model - facebook/opt-1.3b**
+**Target Model - `facebook/opt-6.7b`**  
+**Draft Model - `facebook/opt-1.3b`**
 
 | Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
 |-------------------|-----------------|-----------------|-----------------|
