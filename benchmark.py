@@ -1,32 +1,18 @@
 import time
 import random
-import argparse
 import torch
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModelForCausalLM, GPTNeoXForCausalLM
-from sampling import autoregressive_sampling
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from autoregressive_sampling import autoregressive_sampling
 from speculative_sampling import speculative_sampling
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
-parser = argparse.ArgumentParser(description='Speculative Sampling')
-parser.add_argument('-b', '--benchmark', action='store_true', help='Benchmark tokens/sec')
-args = parser.parse_args()
+target_model = AutoModelForCausalLM.from_pretrained("facebook/opt-13b").to(device)
 
-target_model = AutoModelForCausalLM.from_pretrained(
-  "facebook/opt-13b",
-  cache_dir="./opt-13b",
-).to(device)
+draft_model = AutoModelForCausalLM.from_pretrained("facebook/opt-1.3b").to(device)
 
-draft_model = AutoModelForCausalLM.from_pretrained(
-  "facebook/opt-1.3b",
-  cache_dir="./opt-1.3b",
-).to(device)
-
-tokenizer = AutoTokenizer.from_pretrained(
-  "facebook/opt-13b",
-  cache_dir="./opt-13b",
-)
+tokenizer = AutoTokenizer.from_pretrained("facebook/opt-13b")
 
 prompts_sample_1 = [
     'What did Rutherford discover?\n',
@@ -84,46 +70,46 @@ print("Speculative Sampling with temperature")
 print("Count of new tokens:", len(tokens[0]) - len(inputs_sample.input_ids))
 print(tokenizer.decode(tokens[0]))
 print("******")
+print()
 
-if args.benchmark:
-  print("Benchmarking naive Autoregressive Sampling...")
-  ## Autoregressive
-  # Warmup
-  tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs_sample.input_ids, target_len=MAX_NEW_TOKENS-len(inputs_sample.input_ids), temperature=TEMPERATURE)
+print("Benchmarking naive Autoregressive Sampling...")
+## Autoregressive
+# Warmup
+tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs_sample.input_ids, target_len=MAX_NEW_TOKENS+len(inputs_sample.input_ids), temperature=TEMPERATURE)
 
-  time_taken = 0
-  new_tokens = 0
-  for i in tqdm(range(len(texts))):
-    text = texts[i]
-    inputs = tokenizer(text, return_tensors="pt").to(device)
-    start_len = len(inputs.input_ids)
+time_taken = 0
+new_tokens = 0
+for i in tqdm(range(len(texts))):
+  text = texts[i]
+  inputs = tokenizer(text, return_tensors="pt").to(device)
+  start_len = len(inputs.input_ids)
 
-    start_time = time.time_ns()
-    tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs.input_ids, target_len=MAX_NEW_TOKENS-len(inputs.input_ids), temperature=TEMPERATURE)
-    end_time = time.time_ns()
+  start_time = time.time_ns()
+  tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs.input_ids, target_len=MAX_NEW_TOKENS+len(inputs.input_ids), temperature=TEMPERATURE)
+  end_time = time.time_ns()
 
-    new_tokens += len(tokens[0]) - start_len
-    time_taken += (end_time - start_time) / 1_000_000_000
+  new_tokens += len(tokens[0]) - start_len
+  time_taken += (end_time - start_time) / 1_000_000_000
 
-  print(f"Time per token (Autoregressive Sampling): {new_tokens/time_taken:.2f} tok/s")
+print(f"Latency (Autoregressive Sampling): {new_tokens/time_taken:.2f} tok/s")
 
-  ## Speculative Sampling
-  # Warmup
-  print("Benchmarking Speculative Sampling...")
-  tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs_sample.input_ids, max_new_tokens=MAX_NEW_TOKENS, tokenizer=tokenizer, temperature=TEMPERATURE, debug=False)
+## Speculative Sampling
+# Warmup
+print("Benchmarking Speculative Sampling...")
+tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs_sample.input_ids, max_new_tokens=MAX_NEW_TOKENS, tokenizer=tokenizer, temperature=TEMPERATURE, debug=False)
 
-  time_taken = 0
-  new_tokens = 0
-  for i in tqdm(range(len(texts))):
-    text = texts[i]
-    inputs = tokenizer(text, return_tensors="pt").to(device)
-    start_len = len(inputs.input_ids)
+time_taken = 0
+new_tokens = 0
+for i in tqdm(range(len(texts))):
+  text = texts[i]
+  inputs = tokenizer(text, return_tensors="pt").to(device)
+  start_len = len(inputs.input_ids)
 
-    start_time = time.time_ns()
-    tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, max_new_tokens=MAX_NEW_TOKENS, temperature=TEMPERATURE, tokenizer=tokenizer, debug=False)
-    end_time = time.time_ns()
+  start_time = time.time_ns()
+  tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, max_new_tokens=MAX_NEW_TOKENS, temperature=TEMPERATURE, tokenizer=tokenizer, debug=False)
+  end_time = time.time_ns()
 
-    new_tokens += len(tokens[0]) - start_len
-    time_taken += (end_time - start_time) / 1_000_000_000
+  new_tokens += len(tokens[0]) - start_len
+  time_taken += (end_time - start_time) / 1_000_000_000
 
-  print(f"Time per token (Speculative Sampling): {new_tokens/time_taken:.2f} tok/s")
+print(f"Latency (Speculative Sampling): {new_tokens/time_taken:.2f} tok/s")
