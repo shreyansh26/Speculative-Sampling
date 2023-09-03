@@ -1,40 +1,38 @@
-[2023-09-02 12:56:45,117] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.44s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.09s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.29s/it]
-Target Model - facebook/opt-6.7b
+[2023-09-03 01:22:04,467] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:04<00:08,  4.21s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:08<00:03,  3.99s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.41s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.59s/it]
+Target Model - facebook/opt-13b
 Draft Model - facebook/opt-1.3b
 ************
 
 HF's generate
-Count of new tokens: 85
-</s>The message written in a bottle that washed ashore carried a plea for help from a distant, unknown island.
-
-The bottle was found on a beach in the Philippines, and the message inside was written in English.
-
-The note was written by a man named "John," who said he was from the island of "Babylon."
-
-The note was written in English.
-
-The note was written in
+Count of new tokens: 81
+</s>While cleaning out the garage, Mia discovered a box of her grandfather's old inventions.
+She was so excited to see them.
+She was even more excited to see that they were still in working order.
+She was even more excited to see that they were all for her.
+She was even more excited to see that they were all for her.
+She was even more excited to see that
 ******
 Naive Autoregressive with temperature
 Count of new tokens: 64
-</s>The message written in a bottle that washed ashore carried a plea for help from a distant, unknown island.
-
-The bottle was found on a beach in the Philippines, and the message inside was written in English.
-
-The note was written by a man named "John," who said he was from the island of
+</s>While cleaning out the garage, Mia discovered a box of her grandfather's old inventions.
+She was so excited to see them.
+She was even more excited to see that they were still in working order.
+She was even more excited to see that they were all for her.
+She was even more excited to
 ******
 Speculative Sampling with temperature
-Count of new tokens: 65
-</s>The message written in a bottle that washed ashore carried a plea for help from a distant, unknown island.
-
-The bottle was found on a beach in the Philippines, and the message inside was written in English.
-
-The note was written by a man named "John," who said he was from the island of "
+Count of new tokens: 66
+</s>While cleaning out the garage, Mia discovered a box of her grandfather's old inventions.
+She was so excited to see them.
+She was even more excited to see that they were still in working order.
+She was even more excited to see that they were all for her.
+She was even more excited to see that
 ******
+
 Benchmarking naive Autoregressive Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:03<00:39,  3.61s/it] 17%|█▋        | 2/12 [00:06<00:33,  3.36s/it] 25%|██▌       | 3/12 [00:10<00:29,  3.30s/it] 33%|███▎      | 4/12 [00:13<00:25,  3.19s/it] 42%|████▏     | 5/12 [00:15<00:21,  3.02s/it] 50%|█████     | 6/12 [00:18<00:18,  3.00s/it] 58%|█████▊    | 7/12 [00:21<00:14,  2.97s/it] 67%|██████▋   | 8/12 [00:24<00:11,  2.96s/it] 75%|███████▌  | 9/12 [00:27<00:08,  2.93s/it] 83%|████████▎ | 10/12 [00:30<00:05,  2.94s/it] 92%|█████████▏| 11/12 [00:33<00:02,  2.89s/it]100%|██████████| 12/12 [00:36<00:00,  2.99s/it]100%|██████████| 12/12 [00:36<00:00,  3.03s/it]
-Time per token (Autoregressive Sampling): 20.44 tok/s
+  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:06<01:01,  6.14s/it] 18%|█▊        | 2/11 [00:11<00:53,  5.90s/it] 27%|██▋       | 3/11 [00:17<00:45,  5.69s/it] 36%|███▋      | 4/11 [00:22<00:38,  5.54s/it] 45%|████▌     | 5/11 [00:28<00:33,  5.50s/it] 55%|█████▍    | 6/11 [00:33<00:27,  5.46s/it] 64%|██████▎   | 7/11 [00:38<00:21,  5.40s/it] 73%|███████▎  | 8/11 [00:44<00:16,  5.41s/it] 82%|████████▏ | 9/11 [00:49<00:10,  5.45s/it] 91%|█████████ | 10/11 [00:55<00:05,  5.49s/it]100%|██████████| 11/11 [01:00<00:00,  5.40s/it]100%|██████████| 11/11 [01:00<00:00,  5.50s/it]
+Latency (Autoregressive Sampling): 11.64 tok/s
 Benchmarking Speculative Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:02<00:31,  2.82s/it] 17%|█▋        | 2/12 [00:04<00:20,  2.06s/it] 25%|██▌       | 3/12 [00:06<00:20,  2.26s/it] 33%|███▎      | 4/12 [00:09<00:18,  2.37s/it] 42%|████▏     | 5/12 [00:11<00:15,  2.18s/it] 50%|█████     | 6/12 [00:12<00:12,  2.03s/it] 58%|█████▊    | 7/12 [00:14<00:09,  1.86s/it] 67%|██████▋   | 8/12 [00:16<00:07,  1.94s/it] 75%|███████▌  | 9/12 [00:18<00:05,  1.95s/it] 83%|████████▎ | 10/12 [00:20<00:04,  2.05s/it] 92%|█████████▏| 11/12 [00:23<00:02,  2.12s/it]100%|██████████| 12/12 [00:24<00:00,  2.00s/it]100%|██████████| 12/12 [00:24<00:00,  2.07s/it]
-Time per token (Speculative Sampling): 31.33 tok/s
+  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:04<00:42,  4.22s/it] 18%|█▊        | 2/11 [00:07<00:34,  3.87s/it] 27%|██▋       | 3/11 [00:11<00:30,  3.85s/it] 36%|███▋      | 4/11 [00:15<00:26,  3.82s/it] 45%|████▌     | 5/11 [00:18<00:20,  3.41s/it] 55%|█████▍    | 6/11 [00:20<00:15,  3.18s/it] 64%|██████▎   | 7/11 [00:24<00:12,  3.21s/it] 73%|███████▎  | 8/11 [00:27<00:09,  3.31s/it] 82%|████████▏ | 9/11 [00:30<00:06,  3.04s/it] 91%|█████████ | 10/11 [00:33<00:02,  3.00s/it]100%|██████████| 11/11 [00:35<00:00,  2.83s/it]100%|██████████| 11/11 [00:35<00:00,  3.22s/it]
+Latency (Speculative Sampling): 20.14 tok/s

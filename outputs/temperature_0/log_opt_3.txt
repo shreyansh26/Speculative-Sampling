@@ -1,30 +1,45 @@
-[2023-09-02 13:04:59,147] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.44s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.09s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.30s/it]
+[2023-09-03 01:39:23,889] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:04<00:04,  4.49s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.71s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:05<00:00,  2.98s/it]
 Target Model - facebook/opt-6.7b
 Draft Model - facebook/opt-1.3b
 ************
 
 HF's generate
 Count of new tokens: 79
-</s>In a dusty antique shop, Sarah found a vintage camera with peculiar abilities. She soon discovers that the camera is a time machine, and she can travel back in time to photograph the past. But the more she travels back in time, the more she realizes that the past is not as it seems.
+</s>The key to the mysterious chest had been missing for generations, until today.
 
-The film is a time travel story, but it’s also a story about
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations
 ******
 Naive Autoregressive with temperature
 Count of new tokens: 64
-</s>In a dusty antique shop, Sarah found a vintage camera with peculiar abilities. She soon discovers that the camera is a time machine, and she can travel back in time to photograph the past. But the more she travels back in time, the more she realizes that the past is not as it seems.
+</s>The key to the mysterious chest had been missing for generations, until today.
 
-The film
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until
 ******
 Speculative Sampling with temperature
-Count of new tokens: 63
-</s>In a dusty antique shop, Sarah found a vintage camera with peculiar abilities. She soon discovers that the camera is a time machine, and she can travel back in time to photograph the past. But the more she travels back in time, the more she realizes that the past is not as it seems.
+Count of new tokens: 64
+</s>The key to the mysterious chest had been missing for generations, until today.
 
-The
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until today.
+
+The key to the mysterious chest had been missing for generations, until
 ******
+
 Benchmarking naive Autoregressive Sampling...
-  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:03<00:36,  3.61s/it] 18%|█▊        | 2/11 [00:06<00:31,  3.45s/it] 27%|██▋       | 3/11 [00:10<00:26,  3.31s/it] 36%|███▋      | 4/11 [00:13<00:22,  3.21s/it] 45%|████▌     | 5/11 [00:16<00:19,  3.18s/it] 55%|█████▍    | 6/11 [00:19<00:15,  3.15s/it] 64%|██████▎   | 7/11 [00:22<00:12,  3.12s/it] 73%|███████▎  | 8/11 [00:25<00:09,  3.13s/it] 82%|████████▏ | 9/11 [00:28<00:06,  3.15s/it] 91%|█████████ | 10/11 [00:31<00:03,  3.17s/it]100%|██████████| 11/11 [00:34<00:00,  3.12s/it]100%|██████████| 11/11 [00:34<00:00,  3.18s/it]
-Time per token (Autoregressive Sampling): 19.49 tok/s
+  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:03<00:41,  3.80s/it] 17%|█▋        | 2/12 [00:07<00:35,  3.55s/it] 25%|██▌       | 3/12 [00:10<00:31,  3.49s/it] 33%|███▎      | 4/12 [00:13<00:26,  3.37s/it] 42%|████▏     | 5/12 [00:16<00:22,  3.20s/it] 50%|█████     | 6/12 [00:19<00:19,  3.18s/it] 58%|█████▊    | 7/12 [00:22<00:15,  3.15s/it] 67%|██████▋   | 8/12 [00:25<00:12,  3.13s/it] 75%|███████▌  | 9/12 [00:29<00:09,  3.11s/it] 83%|████████▎ | 10/12 [00:32<00:06,  3.12s/it] 92%|█████████▏| 11/12 [00:35<00:03,  3.07s/it]100%|██████████| 12/12 [00:38<00:00,  3.17s/it]100%|██████████| 12/12 [00:38<00:00,  3.21s/it]
+Latency (Autoregressive Sampling): 19.93 tok/s
 Benchmarking Speculative Sampling...
-  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:03<00:31,  3.10s/it] 18%|█▊        | 2/11 [00:05<00:25,  2.78s/it] 27%|██▋       | 3/11 [00:08<00:22,  2.76s/it] 36%|███▋      | 4/11 [00:10<00:17,  2.53s/it] 45%|████▌     | 5/11 [00:13<00:15,  2.54s/it] 55%|█████▍    | 6/11 [00:15<00:12,  2.41s/it] 64%|██████▎   | 7/11 [00:17<00:09,  2.46s/it] 73%|███████▎  | 8/11 [00:20<00:07,  2.55s/it] 82%|████████▏ | 9/11 [00:23<00:05,  2.53s/it] 91%|█████████ | 10/11 [00:25<00:02,  2.46s/it]100%|██████████| 11/11 [00:27<00:00,  2.33s/it]100%|██████████| 11/11 [00:27<00:00,  2.49s/it]
-Time per token (Speculative Sampling): 26.01 tok/s
+  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:02<00:31,  2.84s/it] 17%|█▋        | 2/12 [00:04<00:21,  2.13s/it] 25%|██▌       | 3/12 [00:06<00:20,  2.27s/it] 33%|███▎      | 4/12 [00:09<00:19,  2.38s/it] 42%|████▏     | 5/12 [00:11<00:15,  2.20s/it] 50%|█████     | 6/12 [00:13<00:12,  2.05s/it] 58%|█████▊    | 7/12 [00:14<00:09,  1.88s/it] 67%|██████▋   | 8/12 [00:16<00:07,  1.96s/it] 75%|███████▌  | 9/12 [00:18<00:05,  1.97s/it] 83%|████████▎ | 10/12 [00:21<00:04,  2.07s/it] 92%|█████████▏| 11/12 [00:23<00:02,  2.14s/it]100%|██████████| 12/12 [00:25<00:00,  2.02s/it]100%|██████████| 12/12 [00:25<00:00,  2.09s/it]
+Latency (Speculative Sampling): 31.03 tok/s
