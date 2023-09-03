@@ -4,7 +4,7 @@ An implementation of speculative sampling as described in the paper [Acceleratin
 
 ## To run
 
-```
+```bash
 python generate.py -h
 ```
 
