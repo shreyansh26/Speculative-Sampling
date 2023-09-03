@@ -54,4 +54,4 @@ Results showing the speedup (as ratio) of speculative sampling over naive autore
 | Temperature = 0   | 1.55            | 1.38            | 1.46            |
 | Temperature = 0.5 | 1.53            | 1.49            | 1.51            |
 
-The speedup ratio seems to increase as the target model size increases (and draft model is also relatively big enough). So, the speedup ratio of 2-2.5x mentioned in the Deepmind paper, could also be true for a 70B target model and a 7B draft model (which they use).
+The speedup ratio seems to increase as the target model size increases (and when the draft model is also relatively big enough). So, the speedup ratio of 2-2.5x mentioned in the Deepmind paper, could also be true for a 70B target model and a 7B draft model (which they use).
