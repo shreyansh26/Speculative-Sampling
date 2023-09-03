@@ -11,7 +11,7 @@ python generate.py -h
 Run the above command to see the parameter options and their description.
 
 **Speculative Sampling**
-```
+```bash
 python generate.py  --method speculative \
                     --prompt "Emily found a mysterious letter on her doorstep one sunny morning." \
                     --max_new_tokens 64 \
@@ -21,7 +21,7 @@ python generate.py  --method speculative \
 ```
 
 **Naive Autoregressive Sampling**
-```
+```bash
 python generate.py  --method autoregressive \
                     --prompt "Emily found a mysterious letter on her doorstep one sunny morning." \
                     --max_new_tokens 64 \
@@ -30,7 +30,7 @@ python generate.py  --method autoregressive \
 ```
 
 **Benchmarking**
-```
+```bash
 python benchmark.py
 ```
 
