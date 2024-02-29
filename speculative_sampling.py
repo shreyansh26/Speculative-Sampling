@@ -2,7 +2,7 @@ import torch
 from utils import sample_from_draft_model, get_distribution, sample
 from transformers import AutoTokenizer
 
-def speculative_sampling(target_model, draft_model, initial_prompt_seq, max_new_tokens, tokenizer, lookahead=4, temperature=1.0, debug=True):
+def speculative_sampling(target_model, draft_model, initial_prompt_seq, target_len, tokenizer, lookahead=4, temperature=1.0, debug=True):
     '''
     Implementation of Algorithm 2 of the paper - Accelerating Large Language Model Decoding 
     with Speculative Sampling (https://arxiv.org/abs/2302.01318)
@@ -12,7 +12,7 @@ def speculative_sampling(target_model, draft_model, initial_prompt_seq, max_new_
     n = initial_prompt_seq.shape[-1]
     fin_prompt_seq = initial_prompt_seq.detach().clone()
 
-    while n < max_new_tokens:
+    while n < target_len:
         n_orig = n
         N = fin_prompt_seq.shape[-1]
         draft_outputs, draft_logits = sample_from_draft_model(draft_model, fin_prompt_seq, new_tokens=lookahead, temperature=temperature)

@@ -34,7 +34,7 @@ if args.method == "speculative":
     inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
 
     start_time = time.time_ns()
-    tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, max_new_tokens=args.max_new_tokens, tokenizer=tokenizer, temperature=args.temperature, debug=False)
+    tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, target_len=args.max_new_tokens+len(inputs.input_ids), tokenizer=tokenizer, temperature=args.temperature, debug=False)
     end_time = time.time_ns()
 
     new_tokens = len(tokens[0]) - len(inputs.input_ids)
@@ -42,6 +42,7 @@ if args.method == "speculative":
 
     print(tokenizer.decode(tokens[0]))
     print()
+    print("New tokens:", new_tokens)
     print(f"Latency (Speculative Sampling): {new_tokens/time_taken:.2f} tok/s")
 
 elif args.method == "autoregressive":
@@ -61,6 +62,7 @@ elif args.method == "autoregressive":
 
     print(tokenizer.decode(tokens[0]))
     print()
+    print("New tokens:", new_tokens)
     print(f"Latency (Naive Autoregressive Sampling): {new_tokens/time_taken:.2f} tok/s")
 
 else:
