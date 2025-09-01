@@ -161,3 +161,9 @@ cython_debug/
 
 pythia*
 opt*
+
+# Claude Code
+.claude/*
+
+# Additional testing artifacts
+.benchmarks/
