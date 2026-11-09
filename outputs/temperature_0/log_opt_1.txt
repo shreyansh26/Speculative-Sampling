@@ -1,34 +1,0 @@
-[2023-09-03 01:18:03,792] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
-Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:04<00:08,  4.08s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:08<00:04,  4.05s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.26s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.48s/it]
-Target Model - facebook/opt-13b
-Draft Model - facebook/opt-1.3b
-************
-
-HF's generate
-Count of new tokens: 78
-</s>When the rain started falling upwards, Lily knew something was terribly wrong.
-She was in the middle of a forest, and the rain was coming from the sky.
-She looked around, and saw that the trees were all swaying, and the leaves were falling from the trees.
-She looked up, and saw that the sky was dark, and the clouds were moving in a way
-******
-Naive Autoregressive with temperature
-Count of new tokens: 64
-</s>When the rain started falling upwards, Lily knew something was terribly wrong.
-She was in the middle of a forest, and the rain was coming from the sky.
-She looked around, and saw that the trees were all swaying, and the leaves were falling from the trees.
-She looked up, and saw
-******
-Speculative Sampling with temperature
-Count of new tokens: 67
-</s>When the rain started falling upwards, Lily knew something was terribly wrong.
-She was in the middle of a forest, and the rain was coming from the sky.
-She looked around, and saw that the trees were all swaying, and the leaves were falling from the trees.
-She looked up, and saw that the sky
-******
-
-Benchmarking naive Autoregressive Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:06<01:07,  6.14s/it] 17%|█▋        | 2/12 [00:11<00:57,  5.77s/it] 25%|██▌       | 3/12 [00:17<00:51,  5.68s/it] 33%|███▎      | 4/12 [00:22<00:43,  5.50s/it] 42%|████▏     | 5/12 [00:27<00:36,  5.23s/it] 50%|█████     | 6/12 [00:32<00:31,  5.20s/it] 58%|█████▊    | 7/12 [00:37<00:25,  5.16s/it] 67%|██████▋   | 8/12 [00:42<00:20,  5.14s/it] 75%|███████▌  | 9/12 [00:47<00:15,  5.15s/it] 83%|████████▎ | 10/12 [00:52<00:10,  5.16s/it] 92%|█████████▏| 11/12 [00:57<00:05,  5.06s/it]100%|██████████| 12/12 [01:03<00:00,  5.22s/it]100%|██████████| 12/12 [01:03<00:00,  5.27s/it]
-Latency (Autoregressive Sampling): 12.14 tok/s
-Benchmarking Speculative Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:04<00:46,  4.21s/it] 17%|█▋        | 2/12 [00:07<00:35,  3.52s/it] 25%|██▌       | 3/12 [00:10<00:32,  3.59s/it] 33%|███▎      | 4/12 [00:13<00:25,  3.19s/it] 42%|████▏     | 5/12 [00:15<00:19,  2.76s/it] 50%|█████     | 6/12 [00:19<00:19,  3.24s/it] 58%|█████▊    | 7/12 [00:21<00:14,  2.81s/it] 67%|██████▋   | 8/12 [00:24<00:10,  2.75s/it] 75%|███████▌  | 9/12 [00:27<00:08,  2.87s/it] 83%|████████▎ | 10/12 [00:29<00:05,  2.69s/it] 92%|█████████▏| 11/12 [00:32<00:02,  2.68s/it]100%|██████████| 12/12 [00:34<00:00,  2.63s/it]100%|██████████| 12/12 [00:34<00:00,  2.90s/it]
-Latency (Speculative Sampling): 22.22 tok/s

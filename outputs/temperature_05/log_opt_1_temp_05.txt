@@ -1,33 +1,0 @@
-[2023-09-03 01:56:07,650] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
-Loading checkpoint shards:   0%|          | 0/3 [00:00<?, ?it/s]Loading checkpoint shards:  33%|███▎      | 1/3 [00:04<00:08,  4.04s/it]Loading checkpoint shards:  67%|██████▋   | 2/3 [00:08<00:04,  4.33s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.41s/it]Loading checkpoint shards: 100%|██████████| 3/3 [00:10<00:00,  3.63s/it]
-Target Model - facebook/opt-13b
-Draft Model - facebook/opt-1.3b
-************
-
-HF's generate
-Count of new tokens: 89
-</s>The old lighthouse had been abandoned for years, but its beam of light suddenly flickered to life one stormy night.
-
-The lighthouse was built in 1858 and was the first of its kind in the world. It was built on a rocky outcrop in the middle of the Atlantic Ocean, and was the first lighthouse to be built in the United States.
-
-The lighthouse was built by the United States Lighthouse Board, which
-******
-Naive Autoregressive with temperature
-Count of new tokens: 64
-</s>The old lighthouse had been abandoned for years, but its beam of light suddenly flickered to life one stormy night. A strange figure appeared in the fog, and the lighthouse keeper’s wife was terrified. She called the police, and the officers arrested the man.
-
-The man was a lighthouse keeper
-******
-Speculative Sampling with temperature
-Count of new tokens: 64
-</s>The old lighthouse had been abandoned for years, but its beam of light suddenly flickered to life one stormy night. A group of young scientists investigating the phenomenon stumble upon a mysterious man in a white suit and enter his floating laboratory.
-
-The man, Dr. John Smith, is a scientist from the distant
-******
-
-Benchmarking naive Autoregressive Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:06<01:07,  6.14s/it] 17%|█▋        | 2/12 [00:11<00:57,  5.77s/it] 25%|██▌       | 3/12 [00:17<00:51,  5.68s/it] 33%|███▎      | 4/12 [00:22<00:44,  5.50s/it] 42%|████▏     | 5/12 [00:27<00:36,  5.24s/it] 50%|█████     | 6/12 [00:32<00:31,  5.21s/it] 58%|█████▊    | 7/12 [00:37<00:25,  5.17s/it] 67%|██████▋   | 8/12 [00:42<00:20,  5.14s/it] 75%|███████▌  | 9/12 [00:47<00:15,  5.09s/it] 83%|████████▎ | 10/12 [00:52<00:10,  5.11s/it] 92%|█████████▏| 11/12 [00:57<00:05,  5.03s/it]100%|██████████| 12/12 [01:03<00:00,  5.22s/it]100%|██████████| 12/12 [01:03<00:00,  5.26s/it]
-Latency (Autoregressive Sampling): 12.16 tok/s
-Benchmarking Speculative Sampling...
-  0%|          | 0/12 [00:00<?, ?it/s]  8%|▊         | 1/12 [00:03<00:37,  3.39s/it] 17%|█▋        | 2/12 [00:06<00:31,  3.19s/it] 25%|██▌       | 3/12 [00:10<00:31,  3.55s/it] 33%|███▎      | 4/12 [00:12<00:25,  3.16s/it] 42%|████▏     | 5/12 [00:15<00:20,  2.96s/it] 50%|█████     | 6/12 [00:18<00:18,  3.09s/it] 58%|█████▊    | 7/12 [00:21<00:14,  2.98s/it] 67%|██████▋   | 8/12 [00:24<00:11,  2.93s/it] 75%|███████▌  | 9/12 [00:27<00:08,  2.93s/it] 83%|████████▎ | 10/12 [00:30<00:06,  3.01s/it] 92%|█████████▏| 11/12 [00:33<00:03,  3.06s/it]100%|██████████| 12/12 [00:37<00:00,  3.30s/it]100%|██████████| 12/12 [00:37<00:00,  3.14s/it]
-Latency (Speculative Sampling): 20.45 tok/s

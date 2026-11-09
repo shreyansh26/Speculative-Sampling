@@ -1,53 +1,0 @@
-[2023-09-03 01:46:00,305] [INFO] [real_accelerator.py:133:get_accelerator] Setting ds_accelerator to cuda (auto detect)
-Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:03<00:03,  3.73s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.23s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:04<00:00,  2.46s/it]
-Target Model - facebook/opt-6.7b
-Draft Model - facebook/opt-1.3b
-************
-
-HF's generate
-Count of new tokens: 80
-</s>On a rainy afternoon, Max stumbled upon an old treasure map in the attic.
-
-The map led him to a hidden treasure in the woods.
-
-Max and his friends set out to find the treasure.
-
-But they didn’t know what they were getting into.
-
-The treasure was a trap.
-
-The treasure was a trap.
-
-The treasure was a
-******
-Naive Autoregressive with temperature
-Count of new tokens: 64
-</s>On a rainy afternoon, Max stumbled upon an old treasure map in the attic.
-
-The map led him to a hidden treasure in the woods.
-
-Max and his friends set out to find the treasure.
-
-But they didn’t know what they were getting into.
-
-The treasure was a
-******
-Speculative Sampling with temperature
-Count of new tokens: 65
-</s>On a rainy afternoon, Max stumbled upon an old treasure map in the attic.
-
-The map led him to a hidden treasure in the woods.
-
-Max and his friends set out to find the treasure.
-
-But they didn’t know what they were getting into.
-
-The treasure was a trap
-******
-
-Benchmarking naive Autoregressive Sampling...
-  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:03<00:37,  3.79s/it] 18%|█▊        | 2/11 [00:07<00:32,  3.62s/it] 27%|██▋       | 3/11 [00:10<00:27,  3.48s/it] 36%|███▋      | 4/11 [00:13<00:23,  3.38s/it] 45%|████▌     | 5/11 [00:17<00:20,  3.36s/it] 55%|█████▍    | 6/11 [00:20<00:16,  3.33s/it] 64%|██████▎   | 7/11 [00:23<00:13,  3.29s/it] 73%|███████▎  | 8/11 [00:26<00:09,  3.30s/it] 82%|████████▏ | 9/11 [00:30<00:06,  3.32s/it] 91%|█████████ | 10/11 [00:33<00:03,  3.35s/it]100%|██████████| 11/11 [00:36<00:00,  3.30s/it]100%|██████████| 11/11 [00:36<00:00,  3.36s/it]
-Latency (Autoregressive Sampling): 19.08 tok/s
-Benchmarking Speculative Sampling...
-  0%|          | 0/11 [00:00<?, ?it/s]  9%|▉         | 1/11 [00:02<00:28,  2.88s/it] 18%|█▊        | 2/11 [00:05<00:23,  2.66s/it] 27%|██▋       | 3/11 [00:08<00:21,  2.70s/it] 36%|███▋      | 4/11 [00:10<00:17,  2.50s/it] 45%|████▌     | 5/11 [00:12<00:15,  2.56s/it] 55%|█████▍    | 6/11 [00:15<00:11,  2.39s/it] 64%|██████▎   | 7/11 [00:17<00:09,  2.45s/it] 73%|███████▎  | 8/11 [00:20<00:07,  2.48s/it] 82%|████████▏ | 9/11 [00:22<00:04,  2.48s/it] 91%|█████████ | 10/11 [00:24<00:02,  2.43s/it]100%|██████████| 11/11 [00:27<00:00,  2.31s/it]100%|██████████| 11/11 [00:27<00:00,  2.46s/it]
-Latency (Speculative Sampling): 26.39 tok/s
