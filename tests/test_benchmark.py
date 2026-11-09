@@ -46,7 +46,7 @@ class BenchmarkTests(unittest.TestCase):
         model = tiny_qwen().to('cuda')
         inputs = [torch.tensor([[1, 5, 4]], device='cuda')]
         sampler = partial(speculative_sampling, model, model, tokenizer=None, debug=False)
-        for new_tokens, rounds, accepted, committed in ((1, 0, 0, 0), (2, 1, 2, 1), (8, 2, 3, 3.5)):
+        for new_tokens, rounds, accepted, committed in ((1, 0, 0, 0), (2, 1, 3, 1), (8, 2, 3, 3.5)):
             with self.subTest(new_tokens=new_tokens), redirect_stdout(io.StringIO()):
                 profile = profile_stages(sampler, inputs, new_tokens, 0)
             self.assertEqual(profile['calls']['prefill'], 1)

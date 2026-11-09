@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "accelerate>=1.15.0",
+    "kernels>=0.17.3",
     "torch",
     "tqdm",
     "transformers>=5.22.2",
