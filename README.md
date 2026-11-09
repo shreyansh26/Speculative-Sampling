@@ -1,226 +1,267 @@
 # Speculative Sampling
 
-An implementation of speculative sampling as described in the paper [Accelerating Large Language Model Decoding with Speculative Sampling](https://arxiv.org/abs/2302.01318) by Deepmind.
+Batch-size-one speculative sampling for **Qwen3**, with an FP8 target and a BF16
+or FP8 draft. Both autoregressive (AR) and speculative decoding use
+FlashAttention-3 and persistent KV caches. **Lookahead defaults to 3; execution
+is eager unless `--cuda-graphs` is passed.**
 
-The current implementation supports one request at a time using full-attention
-Qwen3 models with default rotary embeddings and SDPA or eager attention.
+Supports full-attention Qwen3 models with default rotary embeddings, on CUDA
+with FP16/BF16 activations. FP8 weights retain BF16 activations and KV storage.
+The implementation and measurements here are validated on an NVIDIA H100 80GB.
 
-## Setup
-
-```bash
-uv sync --locked
-```
-
-The project uses Python 3.12 by default. On Linux x86-64, uv selects the
-CUDA 12.6 PyTorch build for compatibility with the H100 host's NVIDIA 570 driver.
-
-## To run
+## Setup and generation
 
 ```bash
-uv run generate.py -h
+uv sync --locked --extra fp8
+
+TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 generate.py \
+  --method speculative \
+  --target_model Qwen/Qwen3-14B-FP8 \
+  --draft_model Qwen/Qwen3-1.7B \
+  --prompt "Emily found a mysterious letter on her doorstep one sunny morning." \
+  --max_new_tokens 64 --temperature 0.5
 ```
 
-Run the above command to see the parameter options and their description.
+Use `--method autoregressive` for target-only decoding, or add `--cuda-graphs`
+to either method. `--draft_model Qwen/Qwen3-1.7B-FP8` selects an FP8 draft.
+`uv run generate.py --help` lists the CLI options.
 
-**Speculative Sampling**
+Python 3.12 and the Linux CUDA 12.6 PyTorch build are selected by the project.
+The `kernels` package downloads a pinned FlashAttention-3 build on first use;
+no local CUDA compilation is needed. The environment variable above selects
+Transformers' Triton FP8 linear kernels, as used in the measurements. CPU/FP32
+inference is not supported.
+
+## Decoding stages
+
+| Stage | Work | CUDA graph mode |
+|---|---|---|
+| Prefill | Run FlashAttention over the actual prompt for both models; sample the first target token. | Always eager |
+| Draft | Generate `lookahead` proposals incrementally from draft KV. | One graph |
+| Verify | Score the pending token plus proposals in a single target forward; accept a prefix and select a correction or bonus. | One graph |
+| Append | Write accepted tokens and the correction/bonus; clip the output budget and rewind KV cursors. | One graph |
+
+The AR baseline has its own eager prefill and a single graph for one-token
+forward, sampling, and append. With graphs disabled, every stage runs eagerly.
+The same `graph_mode` applies to both methods in each benchmark row.
+
+After append, target KV covers all but the last committed token; draft KV
+covers all but the last two. The first draft forward consumes two tokens,
+then subsequent draft forwards consume one. Verify always consumes
+`lookahead + 1` tokens. These fixed query shapes also apply to the final
+partial output block.
+
+KV storage and output/proposal buffers persist for the decoder's lifetime.
+Cache lengths, acceptance count, and output limit live on the GPU. Rejection
+rewinds the logical cursors; subsequent writes overwrite abandoned entries.
+FlashAttention reads only the valid KV prefix and applies causality inside the
+kernel, without building a mask over the reserved capacity. The cache is
+contiguous, not paged: unused capacity still costs memory, but does not require
+attention over unused positions. Prefill uses `flash_attn_func`; decode uses
+`flash_attn_with_kvcache` after StaticCache writes the new KV entries.
+
+### Split policy and graph reuse
+
+KV splitting divides attention over the valid sequence among parallel work
+units, then combines their softmax statistics and outputs. A simple heuristic
+chooses the split count **once per request**, from its initial prompt length:
+
+| Prompt tokens | `num_splits` |
+|---:|---:|
+| 1–511 | 1 |
+| 512–4,095 | 4 |
+| 4,096 and above | 16 |
+
+Both models and both decoding methods use this policy. The count remains fixed
+while generating, even if the sequence crosses a threshold. This is an H100
+approximation informed by the kernel measurements below, not an autotuner.
+
+A decoder caches graph variants by split count. The first request in a new
+bucket captures that variant; later requests in that bucket reuse it, even
+with different prompt lengths and output budgets. Returning to an earlier
+bucket reuses its original graphs. All variants share the decoder's persistent
+KV/output buffers; each captured stage has a private graph memory pool.
+
+Models, temperature, lookahead, and capacity are fixed per decoder. Choose
+`max_seq_len` for the largest committed sequence you intend to serve; the
+speculative cache reserves `lookahead` additional scratch slots. Oversized
+requests fail validation. Decoders serve requests sequentially.
+
+```python
+from speculative_sampling import SpeculativeDecoder
+
+decoder = SpeculativeDecoder(
+    target_model, draft_model, prompt_a,
+    target_len=prompt_a.shape[1] + 64,
+    max_seq_len=8192, lookahead=3, temperature=0.5, cuda_graphs=True,
+)
+first = decoder.generate()
+second = decoder.generate(prompt_b, target_len=prompt_b.shape[1] + 128)
+```
+
+`AutoregressiveDecoder` supports the same capacity and per-request target
+length. The convenience sampling functions and generation CLI construct a new
+decoder per call, so their latency includes capture. The outer speculative
+loop checks completion on the host once per round; the captured stages contain
+no host scalar reads.
+
+## Measured performance
+
+[Full results](outputs/benchmark.csv): **32 configurations**, all with
+Qwen3-14B-FP8 as target, Qwen3-1.7B BF16/FP8 drafts, batch size 1, lookahead 3,
+64 new tokens, temperatures 0/0.5, eager/graph modes, and three repetitions.
+Both prefill and decode use FlashAttention-3; decode uses the split policy above.
+
+Short prompts are six narrative/question prompts, 6–23 tokens each, giving
+18 measured requests per configuration. The long-context workload uses one
+repeated-text synthetic prompt at each of 1,024, 8,192, and 32,768 tokens,
+giving three requests per configuration. **The repeated long prompts make
+acceptance easier and are context/capture stress tests, not representative
+long-document workloads.**
+
+### Short prompts
+
+| Draft | Temperature | Eager speedup | Graph speedup | Graph AR tok/s | Graph spec tok/s | Accepted/round |
+|---|---:|---:|---:|---:|---:|---:|
+| BF16 | 0 | 1.231× | 1.235× | 54.47 | 67.29 | 1.500 |
+| BF16 | 0.5 | 1.144× | 1.151× | 54.26 | 62.43 | 1.383 |
+| FP8 | 0 | 0.785× | 1.076× | 54.41 | 58.53 | 1.484 |
+| FP8 | 0.5 | 0.770× | 1.053× | 54.19 | 57.07 | 1.471 |
+
+Acceptance counts draft proposals only, excluding correction/bonus tokens.
+The table uses graph-mode acceptance; eager and graph profiling are checked
+separately in the CSV.
+
+![Short-prompt end-to-end speedup, eager versus CUDA graphs](outputs/figures/short_speedup.png)
+
+With CUDA graphs, the BF16 draft reaches **1.235× / 1.151×** speedup
+at temperatures 0 / 0.5. The FP8 draft reaches 1.076× / 1.053×.
+A smaller weight format does not guarantee a faster draft at batch size one.
+These are warmed-request ratios against AR with the same graph mode.
+
+### Long context
+
+Temperature-0 end-to-end speedups over the matching AR mode:
+
+| Prompt tokens | BF16 eager | BF16 graphs | FP8 eager | FP8 graphs |
+|---:|---:|---:|---:|---:|
+| 1,024 | 1.888× | 1.761× | 1.232× | 1.584× |
+| 8,192 | 1.595× | 1.288× | 1.149× | 1.193× |
+| 32,768 | 1.197× | 1.017× | 1.005× | 0.971× |
+
+![End-to-end speedup across prompt lengths and temperatures](outputs/figures/context_speedup.png)
+
+At 32K, the BF16-draft graph run averages **5.52 s** per request versus
+**5.62 s** for AR (1.017×). The separate profile spends
+4.92 s/request in the two-model prefill, 88.3% of summed stage time.
+For only 64 output tokens, this prefill cost limits the end-to-end benefit of faster decoding.
+
+![Prefill, draft, verify and append contributions to speculative stage time](outputs/figures/stage_breakdown.png)
+
+### Why split KV attention
+
+The [isolated kernel measurements](outputs/kv_split_benchmark.csv) cover
+48 cases: target AR/verify and draft query shapes, 1K/8K/32K valid lengths,
+and 1/4/8/16 splits. On H100, target-shaped one-token attention at 32K took
+**353.9 µs with one split versus 58.4 µs with 16 splits**; four-token verify
+attention took 329.3 µs versus 58.5 µs. These are attention-only timings,
+excluding prefill, model projections, and sampling.
+
+![FlashAttention kernel latency for different KV split counts](outputs/figures/kv_splits.png)
+
+## Running benchmarks
+
+Run these commands from the project root. Each invocation prints experiments,
+warmups, repetitions, and profiling progress, flushing each CSV row as it finishes.
+It **replaces** the selected output file; use separate paths to retain runs.
+
 ```bash
-uv run generate.py  --method speculative \
-                    --prompt "Emily found a mysterious letter on her doorstep one sunny morning." \
-                    --max_new_tokens 64 \
-                    --target_model Qwen/Qwen3-14B \
-                    --draft_model Qwen/Qwen3-1.7B \
-                    --temperature 0.5
+# Six short prompts, both draft precisions and temperatures.
+TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 \
+  python -m benchmarks.benchmark --output /tmp/short_eager.csv
+
+# Same workload with matched AR/speculative graphs and replay validation.
+TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 \
+  python -m benchmarks.benchmark --cuda-graphs --check-graphs \
+  --output /tmp/short_graphs.csv
+
+# Long-context matrix; omit the two graph flags for its eager counterpart.
+TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 \
+  python -m benchmarks.benchmark --prompt-lengths 1024 8192 32768 \
+  --cuda-graphs --check-graphs --output /tmp/long_graphs.csv
+
+# Isolated attention split measurements.
+uv run --locked python -m benchmarks.benchmark_kv_splits
 ```
 
-**Cached Autoregressive Sampling**
-```bash
-uv run generate.py  --method autoregressive \
-                    --prompt "Emily found a mysterious letter on her doorstep one sunny morning." \
-                    --max_new_tokens 64 \
-                    --target_model Qwen/Qwen3-14B \
-                    --temperature 0.5
-```
+`--lookahead`, `--max-new-tokens`, and `--repeats` change the defaults.
+Target and draft model overrides are listed by `--help`.
+The checked-in CSV combines the four short/long × eager/graph runs.
 
-**Benchmarking**
-```bash
-TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 benchmark.py \
-  --output outputs/benchmark.csv
-```
+### Timing and validation
 
-This runs four experiments sequentially: a Qwen3-14B-FP8 target with native
-Qwen3-1.7B BF16 and Qwen3-1.7B-FP8 drafts, each at temperatures 0 and 0.5.
-Progress names each experiment, warmup, repetition, and profiling pass.
-The target is always FP8. To select a different FP8 target, use
-`--target-model Qwen/Qwen3-32B-FP8`; draft overrides are
-`--bf16-draft-model` and `--fp8-draft-model`.
+- **End-to-end:** synchronized wall time from request validation through
+  prefill and decoding, with warmed reusable decoders. Model loading,
+  tokenization, allocation, warmup, and capture are excluded. Measurement order
+  alternates between AR and speculative decoding. Both generate the requested
+  token count, even after EOS. Speedup is total AR time / total speculative time.
+- **Stage timing:** a separate pass with the first repetition's seeds records
+  CUDA events for prefill/draft/verify/append. Prefill is milliseconds per request
+  for both models together; the other stages are milliseconds per round.
+  Event intervals include GPU idle time between launches. They do not determine
+  the end-to-end speedup, and their sum excludes time outside the stages.
+- **Acceptance:** `profile_avg_accepted_draft_tokens` includes all accepted
+  proposals in the final block, even when the output budget truncates it.
+  `profile_avg_committed_tokens` includes correction/bonus tokens, excludes
+  the prefill token, and counts only committed output.
+- **Graphs:** `--check-graphs` captures at representative bucket lengths,
+  replays at the requested lengths, and returns to a short prompt. It checks
+  exact eager/graph tokens and CUDA RNG, stable buffer/graph identities, and
+  Python forward hooks showing only eager prefill on reuse. Checks are excluded
+  from timing. `ar_graph_count`/`spec_graph_count` include every captured bucket,
+  including validation-only variants; setup seconds are recorded separately.
+- **Memory:** `peak_allocated_gib` includes both models and both AR/speculative
+  decoders in the benchmark process, not the footprint of one request.
 
-Defaults are six prompts (set 1 indices 0, 1, 3, 10 and set 2 indices 2, 8),
-64 new tokens, batch size 1, lookahead 3, and three repetitions. Every prompt
-is warmed up, and measurement order alternates between autoregressive and
-speculative sampling. Set `--repeats` or `--max-new-tokens` to change the run
-length, and `--lookahead` to change the number of draft proposals per round.
-The configured lookahead is printed for each experiment and recorded in the CSV.
-Both methods use static KV caches and generate the requested count
-even if EOS occurs. End-to-end timing includes request setup, prefill, and
-decoding, excluding model loading, tokenization, and warmup.
+All **16 real-model graph configurations** passed eager/graph token and RNG
+equivalence and buffer/graph reuse checks. All 22 automated tests passed on H100.
+Greedy AR/speculative outputs matched in **72/108 measured requests**:
+9/18 in each short-prompt configuration, and 3/3 in each long-context
+configuration. Peak benchmark allocation was 36.55 GiB.
 
-Each invocation writes four summary rows, flushing the CSV after each experiment.
-The saved `outputs/benchmark.csv` combines lookahead-3 and lookahead-4 runs
-(one repetition each). Use a distinct `--output` path to retain previous runs;
-the runner replaces its selected output file. Each row
-includes target-only AR and speculative total seconds, mean request latency
-in milliseconds, throughput, and speedup (`AR time / speculative time`).
+A traced short-prompt divergence reached tied AR logits of 27.625/27.625,
+while the verifier's accumulated KV history yielded 27.375/27.5 for those
+same two tokens. One-token and block forwards from the *identical verifier KV*
+produced bitwise-identical logits at that position. Exact AR/speculative greedy
+parity can therefore fail even when eager/graph replay agrees; the CSV retains
+those match counts rather than assuming equivalence.
 
-Columns prefixed `profile_` come from a separate pass over the same prompts
-with the first repetition's seeds. They include stage totals in milliseconds,
-prefill milliseconds per request (both models), draft/verify/append
-milliseconds per round, and time outside stages. CUDA events do not synchronize
-between stages; their intervals include stream idle time between kernel
-launches. These instrumented timings are separate from the speedup calculation.
+Three repetitions provide a small local comparison, not confidence intervals.
+Changing FP8 kernel shapes or split counts can change floating-point rounding;
+bitwise greedy parity with AR is checked in each run rather than assumed.
 
-`profile_avg_accepted_draft_tokens` counts accepted proposals per verification
-round, excluding correction/bonus tokens. It includes accepted proposals in
-the final block even if they exceed the output budget.
-`profile_avg_committed_tokens` counts actual output tokens per round, including
-correction/bonus tokens and excluding the first token generated by prefill.
-Both averages are zero when no verification rounds run. Greedy exact-match
-counts are recorded at temperature 0 and left blank for stochastic sampling.
-
-## Cached decoding stages
-
-`SpeculativeDecoder` in `speculative_sampling.py` exposes `prefill`, `draft`,
-`verify`, and `append`. Prefill initializes both caches and samples the first
-target token. Draft runs a fixed number of incremental forwards. Verify scores
-the proposed block and selects the accepted prefix plus a correction or bonus.
-Append writes into the output buffer and rewinds cache cursors in place.
-
-After append, target KV covers all but the final committed token and draft KV
-covers all but the final two. The first draft forward consumes those two tokens,
-handling the last uncached proposal after full acceptance. After rejection,
-this recomputes one retained token. Causal masks hide discarded KV entries.
-
-KV storage, proposal probabilities, token buffers, cache cursors, and acceptance
-counts keep stable storage. The three post-prefill stages use device-side state
-and fixed tensor shapes per request, including the final partial output block.
-The outer Python loop reads completion once per round and handles debug output.
-CUDA graph capture is deferred. Static attention spans the allocated capacity,
-which includes lookahead scratch space beyond the requested output length.
-
-Run the cache, rollback, length, and sampling checks with:
+## Tests, plots, and layout
 
 ```bash
-uv run python -m unittest -v test_sampling test_benchmark
+uv run --locked --extra fp8 python -m unittest discover -s tests -t . -v
+uv run --locked --extra plots python -m plots.benchmark_plots
 ```
 
-The earlier BF16-only run is preserved in
-`outputs/qwen3_cached_bf16_draft.json`. On an H100 80GB, with the native BF16
-draft and Triton FP8 target kernels, its three-repetition aggregate was:
+The suite checks sampling, rejection rollback, poisoned unused KV, output
+budgets, FlashAttention logits against an independent full-prefix SDPA
+reference, and graph reuse at split boundaries and through 32K tokens.
+GPU tests skip when CUDA is unavailable. Plot generation validates the complete
+32-row matrix and speedup arithmetic before writing four PNG figures.
 
-| Temperature | Cached AR (tok/s) | Cached speculative (tok/s) | Speedup |
-|-------------|-----------------:|--------------------------:|--------:|
-| 0 | 16.96 | 20.55 | 1.212x |
-| 0.5 | 17.05 | 18.39 | 1.078x |
+```text
+./                       Generation CLI, decoders, cache and sampling helpers
+benchmarks/              End-to-end and isolated KV-split benchmark scripts
+tests/                   Sampling, cache, graph, and benchmark tests
+plots/                   Reproducible Matplotlib figure code
+outputs/benchmark.csv    End-to-end measurements and separate stage profiles
+outputs/kv_split_benchmark.csv
+outputs/figures/          README figures generated from those CSVs
+```
 
-The separate profile pass measured both models' prefill together. Draft,
-verify, and append costs below are per speculative round (four proposals):
-
-| Stage | Temperature 0 | Temperature 0.5 |
-|-------|--------------:|----------------:|
-| Prefill, ms/request | 81.36 | 81.22 |
-| Draft, ms/round | 75.01 | 75.02 |
-| Verify, ms/round | 60.23 | 59.91 |
-| Append, ms/round | 0.170 | 0.167 |
-| Committed tokens/round, excluding prefill | 2.80 | 2.45 |
-
-Draft and verify account for approximately 54% and 43% of the profiled wall
-time. Repetition speedups range from 1.207–1.217x at temperature 0 and
-1.054–1.094x at temperature 0.5. Some individual prompts are slower with
-speculation. These are short prompts (6–23 tokens), and the sampled profile
-uses the first repetition's seeds. Greedy outputs match on 5/6 prompts in
-each repetition; exact parity is not guaranteed with FP8 target numerics.
-CUDA graphs and long-context performance were not measured.
-
-## Historical full-prefix results
-
-The results below were recorded before the cached implementation and use
-full-prefix forwards. The current cached benchmark is a different workload.
-
-Results showing the speedup (as ratio) of speculative sampling over naive autoregressive sampling. These results are from different benchmarking runs and the logs can be found in the [outputs](outputs/) directory.
-
-**Target Model - `facebook/opt-13b`**  
-**Draft Model - `facebook/opt-1.3b`**
-
-| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
-|-------------------|-----------------|-----------------|-----------------|
-| Temperature = 0   | 1.83            | 1.73            | 1.78            |
-| Temperature = 0.5 | 1.68            | 1.81            | 1.75            |
-
-**Target Model - `facebook/opt-6.7b`**  
-**Draft Model - `facebook/opt-1.3b`**
-
-| Config            | Speedup (Set 1) | Speedup (Set 2) | Average Speedup |
-|-------------------|-----------------|-----------------|-----------------|
-| Temperature = 0   | 1.55            | 1.38            | 1.46            |
-| Temperature = 0.5 | 1.53            | 1.49            | 1.51            |
-
-The speedup ratio seems to increase as the target model size increases (and when the draft model is also relatively big enough). So, the speedup ratio of 2-2.5x mentioned in the Deepmind paper, could also be true for a 70B target model and a 7B draft model (which they use).
-
-### Qwen3-32B-FP8 target and Qwen3-1.7B-FP8 draft
-
-Measured on one NVIDIA H100 80 GB with Transformers' Triton FP8 kernels.
-The speedup is speculative throughput divided by autoregressive throughput.
-
-| Temperature | Prompt set | Autoregressive (tok/s) | Speculative (tok/s) | Speedup |
-|-------------|------------|-----------------------:|--------------------:|--------:|
-| 0           | 1          | 11.30                  | 9.53                | 0.843×  |
-| 0           | 2          | 11.61                  | 10.17               | 0.877×  |
-| 0.5         | 1          | 11.58                  | 9.61                | 0.830×  |
-| 0.5         | 2          | 11.63                  | 10.27               | 0.884×  |
-| Overall     | Both       | 11.52                  | 9.87                | 0.857×  |
-
-Both methods generated 2,944 tokens across the four cases. The Qwen3 FP8
-ratios are below the historical OPT ratios of 1.38×–1.83×. The runs differ in
-models, runtime, and token accounting. See the [benchmark log](outputs/qwen3_fp8_h100.txt).
-
-Greedy outputs matched on 21 of 23 prompts. A replay of one divergence
-confirmed that the teacher's single-step and block forwards selected different
-argmax tokens for the same causal prefix.
-
-### Qwen3-14B-FP8 target and Qwen3-1.7B-FP8 draft
-
-The 14B run used the same draft revision, workload, and H100 FP8 configuration.
-
-| Temperature | Prompt set | Autoregressive (tok/s) | Speculative (tok/s) | Speedup |
-|-------------|------------|-----------------------:|--------------------:|--------:|
-| 0           | 1          | 18.73                  | 12.03               | 0.643×  |
-| 0           | 2          | 18.77                  | 13.20               | 0.703×  |
-| 0.5         | 1          | 18.84                  | 12.37               | 0.657×  |
-| 0.5         | 2          | 18.83                  | 12.99               | 0.690×  |
-| Overall     | Both       | 18.79                  | 12.61               | 0.671×  |
-
-With the 14B target, throughput rose for both methods, and the overall
-speculative-to-autoregressive ratio fell from 0.857× to 0.671×. Greedy outputs
-matched on 20 of 23 prompts. See the [14B benchmark log](outputs/qwen3_14b_fp8_h100.txt).
-
-#### Why greedy outputs can diverge with FP8
-
-A target-only replay of Set 1, prompt 2 used the same 32-token prefix in both
-forwards. Both passes read the logits at position 32 (one-indexed) to predict
-token 33. The block pass supplied four additional tokens as input.
-
-| Target input | Logit for `31626` | Logit for `38111` | Greedy choice |
-|--------------|------------------:|------------------:|---------------|
-| 32-token prefix | 17.5 | 17.5 | `31626` (tie-break) |
-| Same prefix plus four draft tokens | 18.0 | 18.125 | `38111` |
-
-Replacing the four appended tokens while keeping the input length at 36 left
-the position-32 logits bitwise identical. The longer input changed the Triton
-FP8 matmul tile from 32 to 64 rows. The earliest observed activation difference
-was in the first layer's FP8 query projection, whose inputs over the shared
-prefix were bitwise identical.
-
-At temperature 0, the standalone teacher and block verifier each assign all
-probability to their own argmax. Speculative sampling enforces the verifier's
-choice. Greedy parity with standalone decoding requires those choices to agree
-at each shared prefix. The paper discusses this numerical caveat in
-[§5](https://arxiv.org/pdf/2302.01318#page=6).
+The sampling algorithm follows
+[Accelerating Large Language Model Decoding with Speculative Sampling](https://arxiv.org/abs/2302.01318).
