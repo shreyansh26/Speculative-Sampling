@@ -32,12 +32,13 @@ if args.method == "speculative":
     tokenizer = AutoTokenizer.from_pretrained(args.target_model)
 
     inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
+    prompt_len = inputs.input_ids.shape[-1]
 
     start_time = time.time_ns()
-    tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, target_len=args.max_new_tokens+len(inputs.input_ids), tokenizer=tokenizer, temperature=args.temperature, debug=False)
+    tokens = speculative_sampling(target_model, draft_model, initial_prompt_seq=inputs.input_ids, target_len=prompt_len+args.max_new_tokens, tokenizer=tokenizer, temperature=args.temperature, debug=False)
     end_time = time.time_ns()
 
-    new_tokens = len(tokens[0]) - len(inputs.input_ids)
+    new_tokens = tokens.shape[-1] - prompt_len
     time_taken = (end_time - start_time) / 1_000_000_000
 
     print(tokenizer.decode(tokens[0]))
@@ -52,12 +53,13 @@ elif args.method == "autoregressive":
     tokenizer = AutoTokenizer.from_pretrained(args.target_model)
 
     inputs = tokenizer(args.prompt, return_tensors="pt").to(device)
+    prompt_len = inputs.input_ids.shape[-1]
 
     start_time = time.time_ns()
-    tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs.input_ids, target_len=args.max_new_tokens+len(inputs.input_ids), temperature=args.temperature)
+    tokens = autoregressive_sampling(target_model, initial_prompt_seq=inputs.input_ids, target_len=prompt_len+args.max_new_tokens, temperature=args.temperature)
     end_time = time.time_ns()
 
-    new_tokens = len(tokens[0]) - len(inputs.input_ids)
+    new_tokens = tokens.shape[-1] - prompt_len
     time_taken = (end_time - start_time) / 1_000_000_000
 
     print(tokenizer.decode(tokens[0]))
