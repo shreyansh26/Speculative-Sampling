@@ -1762,7 +1762,7 @@ requires-dist = [
     { name = "torch", marker = "platform_machine != 'x86_64' or sys_platform != 'linux'" },
     { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", index = "https://download.pytorch.org/whl/cu126" },
     { name = "tqdm" },
-    { name = "transformers" },
+    { name = "transformers", specifier = ">=5.22.2" },
     { name = "transformers", extras = ["kernels"], marker = "extra == 'fp8'", specifier = ">=5.22.2" },
 ]
 provides-extras = ["fp8"]
