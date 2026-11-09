@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 import torch
 
-from benchmark import benchmark_experiment, parse_args, profile_stages, summarize
+from benchmarks.benchmark import benchmark_experiment, parse_args, profile_stages, summarize
 from speculative_sampling import speculative_sampling
-from test_sampling import tiny_qwen
+from tests.test_sampling import tiny_qwen
 
 
 class BenchmarkTests(unittest.TestCase):
