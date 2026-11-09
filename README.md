@@ -50,6 +50,8 @@ TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 uv run --locked --extra fp8 benchmark.py 
   --target-model Qwen/Qwen3-32B-FP8 --draft-model Qwen/Qwen3-1.7B-FP8
 ```
 
+Use `--target-model Qwen/Qwen3-14B-FP8` to repeat the 14B run.
+
 The benchmark runs both prompt sets at temperatures 0 and 0.5. Each method
 generates exactly 64 tokens per prompt with batch size 1 and full-prefix forwards.
 
@@ -95,3 +97,19 @@ models, runtime, and token accounting. See the [benchmark log](outputs/qwen3_fp8
 Greedy outputs matched on 21 of 23 prompts. A replay of one divergence
 confirmed that the teacher's single-step and block forwards selected different
 argmax tokens for the same causal prefix.
+
+### Qwen3-14B-FP8 target and Qwen3-1.7B-FP8 draft
+
+The 14B run used the same draft revision, workload, and H100 FP8 configuration.
+
+| Temperature | Prompt set | Autoregressive (tok/s) | Speculative (tok/s) | Speedup |
+|-------------|------------|-----------------------:|--------------------:|--------:|
+| 0           | 1          | 18.73                  | 12.03               | 0.643×  |
+| 0           | 2          | 18.77                  | 13.20               | 0.703×  |
+| 0.5         | 1          | 18.84                  | 12.37               | 0.657×  |
+| 0.5         | 2          | 18.83                  | 12.99               | 0.690×  |
+| Overall     | Both       | 18.79                  | 12.61               | 0.671×  |
+
+With the 14B target, throughput rose for both methods, and the overall
+speculative-to-autoregressive ratio fell from 0.857× to 0.671×. Greedy outputs
+matched on 20 of 23 prompts. See the [14B benchmark log](outputs/qwen3_14b_fp8_h100.txt).
