@@ -1,12 +1,13 @@
 import io
 from contextlib import redirect_stderr, redirect_stdout
 from functools import partial
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 import torch
 
-from benchmarks.benchmark import benchmark_experiment, parse_args, profile_stages, summarize
+from benchmarks.benchmark import benchmark_experiment, benchmark_inputs, parse_args, profile_stages, summarize
 from speculative_sampling import speculative_sampling
 from tests.test_sampling import tiny_qwen
 
@@ -14,7 +15,11 @@ from tests.test_sampling import tiny_qwen
 class BenchmarkTests(unittest.TestCase):
     def test_lookahead_argument(self):
         with patch('sys.argv', ['benchmark.py']):
-            self.assertEqual(parse_args().lookahead, 3)
+            args = parse_args()
+            self.assertEqual(args.lookahead, 3)
+            self.assertFalse(args.cuda_graphs)
+        with patch('sys.argv', ['benchmark.py', '--cuda-graphs']):
+            self.assertTrue(parse_args().cuda_graphs)
         with patch('sys.argv', ['benchmark.py', '--lookahead', '4']):
             self.assertEqual(parse_args().lookahead, 4)
         for invalid in ('0', '-1'):
@@ -41,6 +46,23 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(row['greedy_exact_matches'], 4)
         self.assertEqual(summarize({'ar': 10, 'spec': 8}, 2, 8, 3, profile, 0, 0.5)['greedy_exact_matches'], '')
 
+    def test_long_prompt_arguments_and_construction(self):
+        with patch('sys.argv', ['benchmark.py', '--prompt-lengths', '1024', '8192', '32768',
+                                '--cuda-graphs', '--check-graphs']):
+            args = parse_args()
+        self.assertEqual(args.prompt_lengths, [1024, 8192, 32768])
+        self.assertTrue(args.check_graphs)
+        for flags in (['--prompt-lengths', '0'], ['--check-graphs'],
+                      ['--cuda-graphs', '--check-graphs', '--max-new-tokens', '1']):
+            with patch('sys.argv', ['benchmark.py', *flags]), redirect_stderr(io.StringIO()), \
+                    self.assertRaises(SystemExit):
+                parse_args()
+        tokenizer = lambda *args, **kwargs: SimpleNamespace(input_ids=torch.tensor([[1, 2, 3]]))
+        for length in (1, 3, 8, 32768):
+            ids, = benchmark_inputs(tokenizer, length)
+            torch.testing.assert_close(ids[0], torch.arange(length) % 3 + 1)
+        self.assertEqual(len(benchmark_inputs(tokenizer)), 6)
+
     @unittest.skipUnless(torch.cuda.is_available(), 'CUDA stage timing requires a GPU')
     def test_profile_acceptance_excludes_bonus_and_preserves_final_block(self):
         model = tiny_qwen().to('cuda')
@@ -64,6 +86,20 @@ class BenchmarkTests(unittest.TestCase):
             row = benchmark_experiment(model, model, inputs, 0, 8, 1)
         self.assertEqual(row['profile_avg_accepted_draft_tokens'], 3)
         self.assertEqual(row['profile_rounds'], 2)
+        self.assertEqual(row['spec_graph_setup_s'], 0)
+        self.assertEqual(row['ar_graph_setup_s'], 0)
+        with redirect_stdout(io.StringIO()):
+            graphed = benchmark_experiment(model, model, inputs, 0, 8, 1, cuda_graphs=True)
+        self.assertEqual(graphed['profile_avg_accepted_draft_tokens'], 3)
+        self.assertEqual(graphed['profile_rounds'], 2)
+        self.assertGreater(graphed['spec_graph_setup_s'], 0)
+        self.assertGreater(graphed['ar_graph_setup_s'], 0)
+        with redirect_stdout(io.StringIO()):
+            reused = benchmark_experiment(model, model, inputs + [inputs[0][:, :1]], 0, 8, 1, cuda_graphs=True)
+        self.assertEqual(reused['ar_graph_count'], 1)
+        self.assertEqual(reused['spec_graph_count'], 3)
+        self.assertEqual(reused['max_seq_len'], 11)
+        self.assertEqual(reused['greedy_exact_matches'], 2)
 
 
 if __name__ == '__main__':

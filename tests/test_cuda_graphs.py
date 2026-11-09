@@ -4,6 +4,7 @@ import unittest
 import torch
 
 from autoregressive_sampling import AutoregressiveDecoder, autoregressive_sampling
+from benchmarks.benchmark import check_graph_reuse
 from qwen3_cache import Qwen3Cache, kv_splits_for_prompt
 from speculative_sampling import SpeculativeDecoder, speculative_sampling
 from tests.test_sampling import full_prefix_greedy, storage_pointers, tiny_qwen
@@ -210,6 +211,20 @@ class CudaGraphTests(unittest.TestCase):
                     torch.testing.assert_close(actual, expected, rtol=0.02, atol=0.002)
                     self.assertEqual(cache.valid_length.item(), prompt_length + query_length)
                     self.assertEqual(model.config._attn_implementation, 'sdpa')
+
+    @torch.inference_mode()
+    def test_long_context_replay(self):
+        target = tiny_qwen().to(device='cuda', dtype=torch.bfloat16)
+        draft = copy.deepcopy(target)
+        draft.lm_head.weight.neg_()
+        inputs = [(torch.arange(length, device='cuda')[None] % 30 + 1)
+                  for length in (511, 512, 1024, 4095, 4096, 8192, 32768)]
+        for temperature in (0, 0.5):
+            for cls, models in ((AutoregressiveDecoder, (target,)), (SpeculativeDecoder, (target, draft))):
+                decoder = cls(*models, inputs[0], 1032, temperature=temperature,
+                              max_seq_len=32776, cuda_graphs=True)
+                check_graph_reuse(decoder, inputs, new_tokens=8)
+                self.assertEqual(set(decoder.graph_cache), {1, 4, 16})
 
     def test_short_output_budget(self):
         model = tiny_qwen().cuda()

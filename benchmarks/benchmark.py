@@ -3,15 +3,15 @@
 import argparse
 from contextlib import ExitStack
 import csv
-from functools import partial
 from pathlib import Path
 import time
 from unittest.mock import patch
 import torch
 import transformers
+from qwen3_cache import FLASH_ATTENTION_REVISION, kv_splits_for_prompt
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from autoregressive_sampling import autoregressive_sampling
-from speculative_sampling import SpeculativeDecoder, speculative_sampling
+from autoregressive_sampling import AutoregressiveDecoder
+from speculative_sampling import SpeculativeDecoder
 
 prompts_sample_1 = [
     'What did Rutherford discover?\n',
@@ -41,6 +41,71 @@ prompts_sample_2 = [
     "During a family camping trip, they stumbled upon an unusual rock formation.",
     "A peculiar antique shop opened in town, and its owner seemed to know everyone's deepest secrets."
   ]
+
+
+def benchmark_inputs(tokenizer, prompt_tokens=None):
+    if prompt_tokens is None:
+        prompts = [prompts_sample_1[i] for i in (0, 1, 3, 10)] + [prompts_sample_2[i] for i in (2, 8)]
+        return [tokenizer(prompt, return_tensors='pt').input_ids for prompt in prompts]
+    corpus = tokenizer('\n'.join(prompts_sample_1 + prompts_sample_2),
+                       return_tensors='pt', add_special_tokens=False).input_ids
+    copies = (prompt_tokens + corpus.shape[1] - 1) // corpus.shape[1]
+    return [corpus.repeat(1, copies)[:, :prompt_tokens].contiguous()]
+
+
+@torch.inference_mode()
+def check_graph_reuse(decoder, inputs, new_tokens):
+    """Check replay within split buckets and reuse when returning to earlier buckets."""
+    short = inputs[0][:, :1]
+    decoder.generate(short, target_len=3)
+    expected_stages = {'decode'} if isinstance(decoder, AutoregressiveDecoder) else {'draft', 'verify', 'append'}
+    assert set(decoder.graphs) == expected_stages
+    variants = dict(decoder.graph_cache)
+    runners = ((decoder.cache,) if isinstance(decoder, AutoregressiveDecoder)
+               else (decoder.target, decoder.proposer))
+
+    def storage_addresses():
+        tensors = [value for value in vars(decoder).values() if isinstance(value, torch.Tensor)]
+        for runner in runners:
+            tensors.append(runner.valid_length)
+            for layer in runner.cache.layers:
+                tensors.extend((layer.keys, layer.values, layer.cumulative_length))
+        return [tensor.data_ptr() for tensor in tensors]
+
+    addresses = storage_addresses()
+    for index, ids in enumerate([*inputs, short]):
+        splits = kv_splits_for_prompt(ids.shape[1])
+        if splits not in variants:
+            capture_length = {1: 1, 4: 512, 16: 4096}[splits]
+            decoder.generate(ids[:, :capture_length], target_len=capture_length + 2)
+            variants[splits] = decoder.graph_cache[splits]
+        graphs = variants[splits]
+        assert set(graphs) == expected_stages
+        target_len = ids.shape[1] + new_tokens
+        torch.manual_seed(index)
+        decoder.cuda_graphs, decoder.graphs = False, {}
+        try:
+            expected = decoder.generate(ids, target_len=target_len)
+            rng = torch.cuda.get_rng_state(ids.device)
+        finally:
+            decoder.cuda_graphs, decoder.graphs = True, dict(graphs)
+        calls = []
+        with ExitStack() as stack:
+            for model in {runner.model for runner in runners}:
+                handle = model.register_forward_pre_hook(
+                    lambda module, args: calls.append((id(module), args[0].shape[1],
+                                                      torch.cuda.is_current_stream_capturing()))
+                )
+                stack.callback(handle.remove)
+            torch.manual_seed(index)
+            actual = decoder.generate(ids, target_len=target_len)
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        torch.testing.assert_close(torch.cuda.get_rng_state(ids.device), rng, rtol=0, atol=0)
+        assert decoder.graphs == graphs and storage_addresses() == addresses
+        assert decoder.graph_cache == variants
+        assert sorted(calls) == sorted((id(runner.model), ids.shape[1], False) for runner in runners)
+        print(f'    {type(decoder).__name__}: {ids.shape[1]} prompt tokens, {splits} KV splits, '
+              'eager/graph tokens and RNG match; stable buffers; decode replay only', flush=True)
 
 
 def timed_sample(sampler, input_ids, target_len, temperature):
@@ -80,6 +145,8 @@ def profile_stages(sampler, inputs, new_tokens, temperature):
 
         def instrument(name, method):
             def measured(decoder):
+                if decoder.capturing:
+                    return method(decoder)
                 start, end = events[name][used[name]]
                 used[name] += 1
                 start.record()
@@ -117,12 +184,36 @@ def profile_stages(sampler, inputs, new_tokens, temperature):
     }
 
 
-def benchmark_experiment(target, draft, inputs, temperature, new_tokens, repeats, lookahead=3):
+def benchmark_experiment(target, draft, inputs, temperature, new_tokens, repeats, lookahead=3,
+                         cuda_graphs=False, check_graphs=False):
+    max_seq_len = max(ids.shape[1] for ids in inputs) + new_tokens
+    first_target_len = inputs[0].shape[1] + new_tokens
+    ar_decoder = AutoregressiveDecoder(
+        target, inputs[0], first_target_len, temperature, cuda_graphs, max_seq_len=max_seq_len,
+    )
+    decoder = SpeculativeDecoder(
+        target, draft, inputs[0], first_target_len, lookahead, temperature, cuda_graphs,
+        max_seq_len=max_seq_len,
+    )
+
+    def sample_ar(initial_prompt_seq, target_len, temperature):
+        return ar_decoder.generate(initial_prompt_seq, target_len=target_len)
+
+    def sample_spec(initial_prompt_seq, target_len, temperature):
+        return decoder.generate(initial_prompt_seq, target_len=target_len)
+
     samplers = {
-        'ar': partial(autoregressive_sampling, target),
-        'spec': partial(speculative_sampling, target, draft, tokenizer=None, debug=False, lookahead=lookahead),
+        'ar': sample_ar,
+        'spec': sample_spec,
     }
-    print('  Warmup', flush=True)
+    if check_graphs:
+        if not cuda_graphs or new_tokens < 2:
+            raise ValueError('Graph validation requires CUDA graphs and at least two new tokens')
+        print('  Graph validation (excluded from timings)', flush=True)
+        for reusable in (ar_decoder, decoder):
+            check_graph_reuse(reusable, inputs, new_tokens)
+    torch.cuda.reset_peak_memory_stats()
+    print(f'  Warmup: shared buffers for all prompt lengths, max_seq_len={max_seq_len}', flush=True)
     for index, ids in enumerate(inputs):
         for sampler in samplers.values():
             torch.manual_seed(index)
@@ -148,7 +239,19 @@ def benchmark_experiment(target, draft, inputs, temperature, new_tokens, repeats
 
     print('  Separate stage/acceptance profiling pass (first repetition seeds)', flush=True)
     profile = profile_stages(samplers['spec'], inputs, new_tokens, temperature)
-    return summarize(seconds, len(inputs), new_tokens, repeats, profile, greedy_matches, temperature)
+    row = summarize(seconds, len(inputs), new_tokens, repeats, profile, greedy_matches, temperature)
+    row['attention_backend'] = 'flash_attention_3_kvcache'
+    row['prefill_backend'] = 'flash_attention_3'
+    row['attention_kernel_revision'] = FLASH_ATTENTION_REVISION
+    row['max_seq_len'] = max_seq_len
+    row['spec_graph_setup_s'] = decoder.capture_seconds
+    row['ar_graph_setup_s'] = ar_decoder.capture_seconds
+    row['spec_graph_count'] = sum(map(len, decoder.graph_cache.values()))
+    row['ar_graph_count'] = sum(map(len, ar_decoder.graph_cache.values()))
+    row['kv_splits'] = ','.join(str(splits) for splits in sorted({kv_splits_for_prompt(ids.shape[1]) for ids in inputs}))
+    row['graph_reuse_checked'] = check_graphs
+    row['peak_allocated_gib'] = torch.cuda.max_memory_allocated() / 2**30
+    return row
 
 
 def summarize(seconds, prompt_count, new_tokens, repeats, profile, greedy_matches, temperature):
@@ -183,10 +286,20 @@ def parse_args():
     parser.add_argument('--max-new-tokens', type=int, default=64)
     parser.add_argument('--repeats', type=int, default=3)
     parser.add_argument('--lookahead', type=int, default=3)
+    parser.add_argument('--prompt-lengths', type=int, nargs='+',
+                        help='Benchmark one synthetic repeated-text prompt per specified token length')
+    parser.add_argument('--check-graphs', action='store_true',
+                        help='Check graph reuse within split buckets against eager output/RNG before timing')
+    parser.add_argument('--cuda-graphs', action='store_true',
+                        help='Capture AR decode and speculative draft/verify/append; prefill stays eager (default: all eager)')
     parser.add_argument('--output', type=Path, default=Path('outputs/benchmark.csv'))
     args = parser.parse_args()
     if args.max_new_tokens < 1 or args.repeats < 1 or args.lookahead < 1:
         parser.error('Token count, repeats, and lookahead must be positive')
+    if args.prompt_lengths is not None and any(length < 1 for length in args.prompt_lengths):
+        parser.error('Prompt lengths must be positive')
+    if args.check_graphs and (not args.cuda_graphs or args.max_new_tokens < 2):
+        parser.error('--check-graphs requires --cuda-graphs and at least two new tokens')
     return args
 
 
@@ -196,22 +309,24 @@ def main():
         raise RuntimeError('CUDA is required for stage timing')
     print(f'Loading FP8 target: {args.target_model}', flush=True)
     target = AutoModelForCausalLM.from_pretrained(
-        args.target_model, dtype='auto', device_map={'': 'cuda'}, attn_implementation='sdpa'
+        args.target_model, dtype='auto', device_map={'': 'cuda'}
     )
     if target.model.layers[0].self_attn.q_proj.weight.dtype != torch.float8_e4m3fn:
         raise ValueError('The target must use FP8 weights')
     tokenizer = AutoTokenizer.from_pretrained(args.target_model)
-    prompts = [prompts_sample_1[i] for i in (0, 1, 3, 10)] + [prompts_sample_2[i] for i in (2, 8)]
-    inputs = [tokenizer(prompt, return_tensors='pt').input_ids.to('cuda') for prompt in prompts]
+    prompt_lengths = args.prompt_lengths or [None]
     metadata = {
         'target_model': args.target_model, 'target_dtype': 'fp8',
         'gpu': torch.cuda.get_device_name(), 'torch_version': torch.__version__,
         'transformers_version': transformers.__version__, 'batch_size': 1, 'lookahead': args.lookahead,
-        'prompt_count': len(inputs), 'new_tokens_per_request': args.max_new_tokens,
+        'new_tokens_per_request': args.max_new_tokens,
         'repeats': args.repeats,
+        'graph_mode': args.cuda_graphs, 'spec_decoder_reused': True,
+        'ar_decoder_reused': True,
     }
-    print(f"{metadata['gpu']} | {len(inputs)} prompts | {args.max_new_tokens} new tokens | "
-          f'{args.repeats} repetitions | lookahead {args.lookahead}', flush=True)
+    print(f"{metadata['gpu']} | prompt lengths {prompt_lengths} | {args.max_new_tokens} new tokens | "
+          f'{args.repeats} repetitions | lookahead {args.lookahead} | '
+          f'CUDA graphs {args.cuda_graphs}', flush=True)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open('w', newline='') as output:
         writer = None
@@ -225,31 +340,37 @@ def main():
             if tokenizer.get_vocab() != draft_tokenizer.get_vocab():
                 raise ValueError('Target and draft tokenizers must map tokens to the same IDs')
             draft = AutoModelForCausalLM.from_pretrained(
-                model_name, dtype='auto', device_map={'': 'cuda'}, attn_implementation='sdpa'
+                model_name, dtype='auto', device_map={'': 'cuda'}
             )
             if draft.model.layers[0].self_attn.q_proj.weight.dtype != expected_dtype:
                 raise ValueError(f'The {label} draft has an unexpected weight dtype')
             for temperature in (0, 0.5):
-                experiment += 1
-                print(f'\nExperiment {experiment}/4: FP8 target + {label.upper()} draft, '
-                      f'temperature={temperature}, lookahead={args.lookahead}', flush=True)
-                row = {**metadata, 'draft_model': model_name, 'draft_dtype': label,
-                       'temperature': temperature}
-                row.update(benchmark_experiment(
-                    target, draft, inputs, temperature, args.max_new_tokens, args.repeats, args.lookahead
-                ))
-                if writer is None:
-                    writer = csv.DictWriter(output, fieldnames=list(row), lineterminator='\n')
-                    writer.writeheader()
-                writer.writerow(row)
-                output.flush()
-                print(f"  AR {row['ar_tokens_per_s']:.2f} tok/s | speculative "
-                      f"{row['spec_tokens_per_s']:.2f} tok/s | speedup {row['speedup']:.3f}x | "
-                      f"accepted draft length {row['profile_avg_accepted_draft_tokens']:.3f}", flush=True)
-                print(f'  Saved CSV row to {args.output}', flush=True)
+                for prompt_tokens in prompt_lengths:
+                    inputs = [ids.to('cuda') for ids in benchmark_inputs(tokenizer, prompt_tokens)]
+                    experiment += 1
+                    print(f'\nExperiment {experiment}/{4 * len(prompt_lengths)}: FP8 target + {label.upper()} draft, '
+                          f'temperature={temperature}, lookahead={args.lookahead}, '
+                          f'prompt_tokens={prompt_tokens}, CUDA graphs={args.cuda_graphs}', flush=True)
+                    row = {**metadata, 'draft_model': model_name, 'draft_dtype': label,
+                           'temperature': temperature, 'prompt_count': len(inputs),
+                           'prompt_tokens': prompt_tokens if prompt_tokens is not None else '',
+                           'prompt_set': 'synthetic_repeated_prompts' if prompt_tokens is not None else 'short_prompts'}
+                    row.update(benchmark_experiment(
+                        target, draft, inputs, temperature, args.max_new_tokens, args.repeats,
+                        args.lookahead, args.cuda_graphs, args.check_graphs,
+                    ))
+                    if writer is None:
+                        writer = csv.DictWriter(output, fieldnames=list(row), lineterminator='\n')
+                        writer.writeheader()
+                    writer.writerow(row)
+                    output.flush()
+                    print(f"  AR {row['ar_tokens_per_s']:.2f} tok/s | speculative "
+                          f"{row['spec_tokens_per_s']:.2f} tok/s | speedup {row['speedup']:.3f}x | "
+                          f"accepted draft length {row['profile_avg_accepted_draft_tokens']:.3f}", flush=True)
+                    print(f'  Saved CSV row to {args.output}', flush=True)
             del draft
             torch.cuda.empty_cache()
-    print(f'\nCompleted all four experiments: {args.output}', flush=True)
+    print(f'\nCompleted all {experiment} experiments: {args.output}', flush=True)
 
 
 if __name__ == '__main__':
