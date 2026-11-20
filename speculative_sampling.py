@@ -65,10 +65,7 @@ class SpeculativeDecoder:
         splits = kv_splits_for_prompt(self.prompt_length)
         self.target.num_splits = self.proposer.num_splits = splits
         self.graphs = self.graph_cache.get(splits, {}) if self.cuda_graphs else {}
-        self.length.zero_()
         self.accepted.zero_()
-        if self.target.cache.layers[0].is_initialized:
-            self.target.rewind(self.length)
         prompt = self.prompt[:, :self.prompt_length]
         self.tokens[:, :self.prompt_length].copy_(prompt)
         logits = self.target.forward(prompt, prefill=True)[:, -1, :]
@@ -78,8 +75,6 @@ class SpeculativeDecoder:
         self.length.fill_(self.prompt_length + 1)
         self.stop_length.fill_(self.target_len)
         if self.prompt_length + 1 < self.target_len:
-            if self.proposer.cache.layers[0].is_initialized:
-                self.proposer.rewind(0)
             self.proposer.forward(prompt, prefill=True, logits_to_keep=None)
             self.proposer.rewind(self.length - 2)
 
@@ -146,7 +141,7 @@ class SpeculativeDecoder:
         device = self.tokens.device
         if device.type != 'cuda':
             raise ValueError('CUDA graph capture requires CUDA')
-        if not self.target.cache.layers[0].is_initialized:
+        if not self.target.is_initialized:
             raise ValueError('Prefill before capturing decode stages')
         if self.length.item() >= self.target_len:
             return

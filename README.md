@@ -36,7 +36,7 @@ inference is not supported.
 
 | Stage | Work | CUDA graph mode |
 |---|---|---|
-| Prefill | Run FlashAttention over the actual prompt for both models; sample the first target token. | Always eager |
+| Prefill | Run the target over the prompt and sample the first token. Prefill draft KV only if more tokens are needed. | Always eager |
 | Draft | Generate `lookahead` proposals incrementally from draft KV. | One graph |
 | Verify | Score the pending token plus proposals in a single target forward; accept a prefix and select a correction or bonus. | One graph |
 | Append | Write accepted tokens and the correction/bonus; clip the output budget and rewind KV cursors. | One graph |
@@ -57,8 +57,10 @@ rewinds the logical cursors; subsequent writes overwrite abandoned entries.
 FlashAttention reads only the valid KV prefix and applies causality inside the
 kernel, without building a mask over the reserved capacity. The cache is
 contiguous, not paged: unused capacity still costs memory, but does not require
-attention over unused positions. Prefill uses `flash_attn_func`; decode uses
-`flash_attn_with_kvcache` after StaticCache writes the new KV entries.
+attention over unused positions. Prefill writes KV and uses `flash_attn_func`.
+During decode, `flash_attn_with_kvcache` appends new KV and attends in one call.
+All layers in a model use the same pre-append cursor, which advances after the
+forward.
 
 ### Split policy and graph reuse
 

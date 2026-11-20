@@ -68,8 +68,8 @@ def check_graph_reuse(decoder, inputs, new_tokens):
         tensors = [value for value in vars(decoder).values() if isinstance(value, torch.Tensor)]
         for runner in runners:
             tensors.append(runner.valid_length)
-            for layer in runner.cache.layers:
-                tensors.extend((layer.keys, layer.values, layer.cumulative_length))
+            for keys, values in runner.layers:
+                tensors.extend((keys, values))
         return [tensor.data_ptr() for tensor in tensors]
 
     addresses = storage_addresses()

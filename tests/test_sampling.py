@@ -32,8 +32,9 @@ def full_prefix_greedy(model, prompt, length):
 def storage_pointers(decoder):
     tensors = [value for value in vars(decoder).values() if isinstance(value, torch.Tensor)]
     for runner in (decoder.target, decoder.proposer):
-        for layer in runner.cache.layers:
-            tensors.extend((layer.keys, layer.values, layer.cumulative_length))
+        tensors.append(runner.valid_length)
+        for keys, values in runner.layers:
+            tensors.extend((keys, values))
     return [tensor.data_ptr() for tensor in tensors]
 
 
@@ -103,10 +104,10 @@ class SamplingTests(unittest.TestCase):
 
                     # Poison abandoned slots to check that attention reads only the valid prefix.
                     for runner, cached_length in ((decoder.target, length - 1), (decoder.proposer, length - 2)):
-                        for layer in runner.cache.layers:
-                            self.assertEqual(layer.cumulative_length.item(), cached_length)
-                            layer.keys[:, :, cached_length:, :].fill_(100)
-                            layer.values[:, :, cached_length:, :].fill_(100)
+                        self.assertEqual(runner.valid_length.item(), cached_length)
+                        for keys, values in runner.layers:
+                            keys[:, :, cached_length:, :].fill_(100)
+                            values[:, :, cached_length:, :].fill_(100)
                     while decoder.length.item() < 19:
                         decoder.draft()
                         decoder.verify()
@@ -150,7 +151,7 @@ class SamplingTests(unittest.TestCase):
             torch.testing.assert_close(decoder.generate(), expected)
             torch.testing.assert_close(torch.cuda.get_rng_state(), rng)
             self.assertEqual(draft_queries, [])
-            self.assertFalse(decoder.proposer.cache.layers[0].is_initialized)
+            self.assertFalse(decoder.proposer.is_initialized)
 
             actual = decoder.generate(target_len=short_len + 1)
             self.assertEqual(actual.shape[1], short_len + 1)
