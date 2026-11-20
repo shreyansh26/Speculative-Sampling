@@ -182,6 +182,28 @@ class SamplingTests(unittest.TestCase):
                 if torch.equal(q, p):
                     torch.testing.assert_close(bonus_counts / 4096, p, rtol=0, atol=0.025)
 
+    @patch('qwen3_cache.flash_attention_kernel')
+    def test_stochastic_verification_under_bf16_default(self, _kernel):
+        model = tiny_qwen(vocab_size=2)
+        prompt = torch.tensor([[1]], device='cuda')
+        logits = torch.tensor([0.2, 0.8], device='cuda', dtype=torch.float32).log().view(1, 1, 2)
+        default_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+            decoder = SpeculativeDecoder(model, model, prompt, 5, lookahead=2)
+            greedy = SpeculativeDecoder(model, model, prompt, 5, temperature=0)
+            with patch.object(decoder.proposer, 'forward', return_value=logits), \
+                 patch.object(decoder.target, 'forward', return_value=logits.expand(1, 3, 2)), \
+                 patch.object(torch, 'rand_like', side_effect=lambda p: torch.full_like(p, 0.9995)):
+                decoder.prefill()
+                decoder.draft()
+                decoder.verify()
+            self.assertEqual(decoder.draft_probs.dtype, torch.float32)
+            self.assertEqual(decoder.accepted.item(), decoder.lookahead)
+            self.assertIsNone(greedy.draft_probs)
+        finally:
+            torch.set_default_dtype(default_dtype)
+
     def test_invalid_requests(self):
         model = tiny_qwen()
         for prompt, length, temperature in (

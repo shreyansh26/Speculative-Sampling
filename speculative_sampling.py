@@ -48,9 +48,12 @@ class SpeculativeDecoder:
         self.block = torch.zeros((1, self.lookahead + 1), dtype=torch.long, device=device)
         self.commit_tokens = torch.zeros_like(self.block)
         self.draft_input = torch.zeros((1, 2), dtype=torch.long, device=device)
-        self.draft_probs = torch.zeros(
-            (1, self.lookahead + 1, draft_model.config.vocab_size), device=device,
-        )
+        self.draft_probs = None
+        if self.temperature != 0:
+            self.draft_probs = torch.zeros(
+                (1, self.lookahead + 1, draft_model.config.vocab_size),
+                dtype=torch.float32, device=device,
+            )
         self.block_offsets = torch.arange(self.lookahead + 1, device=device)[None, :]
         self.catchup_offsets = torch.tensor([[-2, -1]], device=device)
 
