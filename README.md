@@ -41,7 +41,7 @@ inference is not supported.
 | Verify | Score the pending token plus proposals in a single target forward; accept a prefix and select a correction or bonus. | One graph |
 | Append | Write accepted tokens and the correction/bonus; clip the output budget and rewind KV cursors. | One graph |
 
-The AR baseline has its own eager prefill and a single graph for one-token
+The AR baseline has its own eager prefill and a graph per split count for one-token
 forward, sampling, and append. With graphs disabled, every stage runs eagerly.
 The same `graph_mode` applies to both methods in each benchmark row.
 
@@ -65,24 +65,22 @@ forward.
 ### Split policy and graph reuse
 
 KV splitting divides attention over the valid sequence among parallel work
-units, then combines their softmax statistics and outputs. A simple heuristic
-chooses the split count **once per request**, from its initial prompt length:
+units, then combines their softmax statistics and outputs. Both decoders
+select the split count from the committed token count at each round boundary.
 
-| Prompt tokens | `num_splits` |
+| Committed tokens | `num_splits` |
 |---:|---:|
 | 1–511 | 1 |
-| 512–4,095 | 4 |
+| 512–1,023 | 4 |
+| 1,024–4,095 | 8 |
 | 4,096 and above | 16 |
 
-Both models and both decoding methods use this policy. The count remains fixed
-while generating, even if the sequence crosses a threshold. This is an H100
-approximation informed by the kernel measurements below, not an autotuner.
-
-A decoder caches graph variants by split count. The first request in a new
-bucket captures that variant; later requests in that bucket reuse it, even
-with different prompt lengths and output budgets. Returning to an earlier
-bucket reuses its original graphs. All variants share the decoder's persistent
-KV/output buffers; each captured stage has a private graph memory pool.
+The thresholds are tuned for H100 using the kernel measurements below.
+After eager prefill, a decoder warms and captures any missing variants the
+request can reach, using the prefilled KV prefix. Decode then switches among
+those graphs as the sequence grows. Later requests reuse the same variants
+and persistent KV/output buffers. Each captured stage has a private graph
+memory pool.
 
 Models, temperature, lookahead, and capacity are fixed per decoder. Choose
 `max_seq_len` for the largest committed sequence you intend to serve; the
@@ -112,7 +110,8 @@ no host scalar reads.
 [Full results](outputs/benchmark.csv): **32 configurations**, all with
 Qwen3-14B-FP8 as target, Qwen3-1.7B BF16/FP8 drafts, batch size 1, lookahead 3,
 64 new tokens, temperatures 0/0.5, eager/graph modes, and three repetitions.
-Both prefill and decode use FlashAttention-3; decode uses the split policy above.
+These runs used FlashAttention-3 and chose a fixed 1, 4, or 16 splits from
+the initial prompt length.
 
 Short prompts are six narrative/question prompts, 6–23 tokens each, giving
 18 measured requests per configuration. The long-context workload uses one

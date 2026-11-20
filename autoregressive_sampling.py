@@ -1,7 +1,7 @@
 import torch
 
 from cuda_graphs import capture_cuda_graphs
-from qwen3_cache import Qwen3Cache, kv_splits_for_prompt, validate_request
+from qwen3_cache import Qwen3Cache, kv_splits_for_length, kv_splits_for_range, validate_request
 from utils import sample
 
 
@@ -24,14 +24,17 @@ class AutoregressiveDecoder:
         self.tokens = torch.empty_like(self.prompt)
         self.token = torch.empty((1, 1), dtype=torch.long, device=self.prompt.device)
         self.length = torch.tensor(self.prompt_length, device=self.prompt.device)
-        self.graphs = {}
-        self.graph_cache = {}
+        self.active_graphs = {}
+        self.graphs_by_split = {}
         self.capture_seconds = 0.0
+
+    def select_split(self, splits):
+        self.cache.num_splits = splits
+        self.active_graphs = self.graphs_by_split.get(splits, {}) if self.cuda_graphs else {}
 
     @torch.inference_mode()
     def prefill(self):
-        self.cache.num_splits = kv_splits_for_prompt(self.prompt_length)
-        self.graphs = self.graph_cache.get(self.cache.num_splits, {}) if self.cuda_graphs else {}
+        self.select_split(kv_splits_for_length(self.prompt_length + 1))
         prompt = self.prompt[:, :self.prompt_length]
         self.tokens[:, :self.prompt_length].copy_(prompt)
         logits = self.cache.forward(prompt, prefill=True)[:, -1, :]
@@ -41,8 +44,8 @@ class AutoregressiveDecoder:
 
     @torch.inference_mode()
     def decode(self):
-        if self.graphs:
-            self.graphs['decode'].replay()
+        if self.active_graphs:
+            self.active_graphs['decode'].replay()
             return
         logits = self.cache.forward(self.token)[:, -1, :]
         self.token.copy_(sample(logits, self.temperature))
@@ -50,29 +53,33 @@ class AutoregressiveDecoder:
         self.length.add_(1)
 
     @torch.inference_mode()
-    def capture_decode(self):
-        if self.graphs:
-            return
+    def capture_decode(self, length=None):
         device = self.tokens.device
         if device.type != 'cuda':
             raise ValueError('CUDA graph capture requires CUDA')
         if not self.cache.is_initialized:
             raise ValueError('Prefill before capturing decode')
-        if self.length.item() >= self.target_len:
+        length = self.length.item() if length is None else length
+        missing = [splits for splits in kv_splits_for_range(length, self.target_len)
+                   if splits not in self.graphs_by_split]
+        if not missing:
             return
-        length = self.length.clone()
+        saved_length = self.length.clone()
         token = self.token.clone()
 
         def restore():
-            self.length.copy_(length)
+            self.length.copy_(saved_length)
             self.token.copy_(token)
-            self.cache.rewind(length - 1)
+            self.cache.rewind(saved_length - 1)
 
-        self.graphs, seconds = capture_cuda_graphs(
-            {'decode': self.decode}, restore, device,
-        )
-        self.graph_cache[self.cache.num_splits] = self.graphs
-        self.capture_seconds += seconds
+        try:
+            for splits in missing:
+                self.select_split(splits)
+                graphs, seconds = capture_cuda_graphs({'decode': self.decode}, restore, device)
+                self.graphs_by_split[splits] = graphs
+                self.capture_seconds += seconds
+        finally:
+            self.select_split(kv_splits_for_length(length))
 
     @torch.inference_mode()
     def generate(self, initial_prompt_seq=None, target_len=None):
@@ -86,10 +93,13 @@ class AutoregressiveDecoder:
         if target_len <= self.prompt_length:
             return self.prompt[:, :self.prompt_length].clone()
         self.prefill()
-        remaining = self.target_len - self.prompt_length - 1
-        if self.cuda_graphs and remaining and not self.graphs:
-            self.capture_decode()
-        for _ in range(remaining):
+        start = self.prompt_length + 1
+        if self.cuda_graphs and start < self.target_len:
+            self.capture_decode(start)
+        for length in range(start, self.target_len):
+            splits = kv_splits_for_length(length)
+            if splits != self.cache.num_splits:
+                self.select_split(splits)
             self.decode()
         return self.tokens[:, :self.target_len].clone()
 

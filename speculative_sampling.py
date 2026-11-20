@@ -1,7 +1,7 @@
 import torch
 
 from cuda_graphs import capture_cuda_graphs
-from qwen3_cache import Qwen3Cache, kv_splits_for_prompt, validate_request
+from qwen3_cache import Qwen3Cache, kv_splits_for_length, kv_splits_for_range, validate_request
 from utils import get_distribution, sample, sample_probabilities
 
 
@@ -13,7 +13,8 @@ class SpeculativeDecoder:
     prefix is tokens[:, :L-1], and the draft KV prefix is tokens[:, :L-2].
     Slice ends are exclusive. The next draft forward consumes the last two
     committed tokens. Verify consumes the last committed token and the proposals.
-    Call prefill once, then draft, verify, and append in that order.
+    Call prefill once, then draft, verify, and append in that order. When
+    driving stages directly, select the split at each committed-length boundary.
     """
 
     def __init__(self, target_model, draft_model, initial_prompt_seq, target_len,
@@ -35,8 +36,8 @@ class SpeculativeDecoder:
         self.lookahead = lookahead
         self.temperature = temperature
         self.cuda_graphs = cuda_graphs
-        self.graphs = {}
-        self.graph_cache = {}
+        self.active_graphs = {}
+        self.graphs_by_split = {}
         self.capturing = False
         self.capture_seconds = 0.0
         capacity = self.max_seq_len + self.lookahead
@@ -60,11 +61,13 @@ class SpeculativeDecoder:
         self.block_offsets = torch.arange(self.lookahead + 1, device=device)[None, :]
         self.catchup_offsets = torch.tensor([[-2, -1]], device=device)
 
+    def select_split(self, splits):
+        self.target.num_splits = self.proposer.num_splits = splits
+        self.active_graphs = self.graphs_by_split.get(splits, {}) if self.cuda_graphs else {}
+
     @torch.inference_mode()
     def prefill(self):
-        splits = kv_splits_for_prompt(self.prompt_length)
-        self.target.num_splits = self.proposer.num_splits = splits
-        self.graphs = self.graph_cache.get(splits, {}) if self.cuda_graphs else {}
+        self.select_split(kv_splits_for_length(self.prompt_length + 1))
         self.accepted.zero_()
         prompt = self.prompt[:, :self.prompt_length]
         self.tokens[:, :self.prompt_length].copy_(prompt)
@@ -80,8 +83,8 @@ class SpeculativeDecoder:
 
     @torch.inference_mode()
     def draft(self):
-        if self.graphs:
-            self.graphs['draft'].replay()
+        if self.active_graphs:
+            self.active_graphs['draft'].replay()
             return
         torch.gather(self.tokens, 1, self.length + self.catchup_offsets, out=self.draft_input)
         self.block[:, :1].copy_(self.draft_input[:, -1:])
@@ -100,8 +103,8 @@ class SpeculativeDecoder:
 
     @torch.inference_mode()
     def verify(self):
-        if self.graphs:
-            self.graphs['verify'].replay()
+        if self.active_graphs:
+            self.active_graphs['verify'].replay()
             return
         logits = self.target.forward(self.block, logits_to_keep=0)
         proposals = self.block[:, 1:]
@@ -125,8 +128,8 @@ class SpeculativeDecoder:
 
     @torch.inference_mode()
     def append(self):
-        if self.graphs:
-            self.graphs['append'].replay()
+        if self.active_graphs:
+            self.active_graphs['append'].replay()
             return
         self.tokens.scatter_(1, self.length + self.block_offsets, self.commit_tokens)
         self.length.add_(self.accepted + 1).clamp_(max=self.stop_length)
@@ -134,34 +137,36 @@ class SpeculativeDecoder:
         self.proposer.rewind(self.length - 2)
 
     @torch.inference_mode()
-    def capture_stages(self):
-        """Capture once after eager prefill; preserve its KV prefix and RNG state."""
-        if self.graphs:
-            return
+    def capture_stages(self, length=None):
+        """Prepare missing variants against the prefilled prefix and preserve RNG."""
         device = self.tokens.device
         if device.type != 'cuda':
             raise ValueError('CUDA graph capture requires CUDA')
         if not self.target.is_initialized:
             raise ValueError('Prefill before capturing decode stages')
-        if self.length.item() >= self.target_len:
+        length = self.length.item() if length is None else length
+        missing = [splits for splits in kv_splits_for_range(length, self.target_len)
+                   if splits not in self.graphs_by_split]
+        if not missing:
             return
-        length = self.length.clone()
+        saved_length = self.length.clone()
 
         def restore():
-            self.length.copy_(length)
-            self.target.rewind(length - 1)
-            self.proposer.rewind(length - 2)
+            self.length.copy_(saved_length)
+            self.target.rewind(saved_length - 1)
+            self.proposer.rewind(saved_length - 2)
             self.accepted.zero_()
 
+        stages = {name: getattr(self, name) for name in ('draft', 'verify', 'append')}
         self.capturing = True
         try:
-            self.graphs, seconds = capture_cuda_graphs(
-                {name: getattr(self, name) for name in ('draft', 'verify', 'append')},
-                restore, device,
-            )
-            self.graph_cache[self.target.num_splits] = self.graphs
-            self.capture_seconds += seconds
+            for splits in missing:
+                self.select_split(splits)
+                graphs, seconds = capture_cuda_graphs(stages, restore, device)
+                self.graphs_by_split[splits] = graphs
+                self.capture_seconds += seconds
         finally:
+            self.select_split(kv_splits_for_length(length))
             self.capturing = False
 
     @torch.inference_mode()
@@ -178,9 +183,12 @@ class SpeculativeDecoder:
             return self.prompt[:, :self.prompt_length].clone()
         self.prefill()
         length = self.prompt_length + 1
-        if self.cuda_graphs and length < self.target_len and not self.graphs:
-            self.capture_stages()
+        if self.cuda_graphs and length < self.target_len:
+            self.capture_stages(length)
         while length < self.target_len:
+            splits = kv_splits_for_length(length)
+            if splits != self.target.num_splits:
+                self.select_split(splits)
             start = length
             self.draft()
             self.verify()
