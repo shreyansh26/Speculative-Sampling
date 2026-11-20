@@ -131,6 +131,32 @@ class SamplingTests(unittest.TestCase):
                     torch.testing.assert_close(actual, full_prefix_greedy(model, prompt, length))
                     self.assertEqual(actual.shape[1], length)
 
+    def test_one_token_skips_draft_and_next_request_initializes_it(self):
+        target = tiny_qwen()
+        draft = copy.deepcopy(target)
+        prompt = torch.tensor([[1, 5, 4]], device='cuda')
+        short_len = prompt.shape[1] + 1
+        decoder = SpeculativeDecoder(target, draft, prompt, short_len, max_seq_len=8)
+        torch.manual_seed(42)
+        expected = autoregressive_sampling(target, prompt, short_len)
+        rng = torch.cuda.get_rng_state()
+        torch.manual_seed(42)
+        draft_queries = []
+        projections = []
+        with draft.base_model.register_forward_pre_hook(
+            lambda _, args, kwargs: draft_queries.append((args[0] if args else kwargs['input_ids']).shape[1]),
+            with_kwargs=True,
+        ), draft.lm_head.register_forward_pre_hook(lambda _, args: projections.append(args[0].shape[1])):
+            torch.testing.assert_close(decoder.generate(), expected)
+            torch.testing.assert_close(torch.cuda.get_rng_state(), rng)
+            self.assertEqual(draft_queries, [])
+            self.assertFalse(decoder.proposer.cache.layers[0].is_initialized)
+
+            actual = decoder.generate(target_len=short_len + 1)
+            self.assertEqual(actual.shape[1], short_len + 1)
+            self.assertEqual(draft_queries, [3, 2, 1, 1])
+            self.assertEqual(projections, [1, 1, 1])
+
     @torch.inference_mode()
     def test_stochastic_cached_logits_match_full_prefix(self):
         target = tiny_qwen()

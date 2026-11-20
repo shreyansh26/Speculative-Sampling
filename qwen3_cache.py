@@ -90,12 +90,16 @@ class Qwen3Cache:
         # Select this backend only for our forward; ordinary model calls retain theirs.
         self.model.config._attn_implementation = 'qwen3_kvcache'
         try:
-            return self.model(
-                input_ids, position_ids=positions[None, :],
+            kwargs = dict(
+                position_ids=positions[None, :],
                 attention_mask={'full_attention': None},
-                past_key_values=self.cache, use_cache=True, logits_to_keep=logits_to_keep,
+                past_key_values=self.cache, use_cache=True,
                 qwen3_cache=self, prefill=prefill,
-            ).logits
+            )
+            if logits_to_keep is None:
+                self.model.base_model(input_ids, **kwargs)
+                return
+            return self.model(input_ids, logits_to_keep=logits_to_keep, **kwargs).logits
         finally:
             self.model.config._attn_implementation = implementation
 
