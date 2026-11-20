@@ -14,7 +14,7 @@ def main():
     kernel = flash_attention_kernel()
     capacity = 32768 + 64 + 3
     length = torch.tensor([64], dtype=torch.int32, device='cuda')
-    # Match StaticCache's head-major layout, presented through sequence-major views.
+    # Match the decoder's head-major layout, presented through sequence-major views.
     k = torch.randn(1, 8, capacity, 128, dtype=torch.bfloat16, device='cuda').transpose(1, 2)
     v = torch.randn_like(k.transpose(1, 2)).transpose(1, 2)
     path = Path('outputs/kv_split_benchmark.csv')

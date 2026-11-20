@@ -68,8 +68,8 @@ def check_graph_reuse(decoder, inputs, new_tokens):
         tensors = [value for value in vars(decoder).values() if isinstance(value, torch.Tensor)]
         for runner in runners:
             tensors.append(runner.valid_length)
-            for layer in runner.cache.layers:
-                tensors.extend((layer.keys, layer.values, layer.cumulative_length))
+            for keys, values in runner.layers:
+                tensors.extend((keys, values))
         return [tensor.data_ptr() for tensor in tensors]
 
     addresses = storage_addresses()
@@ -91,10 +91,13 @@ def check_graph_reuse(decoder, inputs, new_tokens):
             decoder.cuda_graphs, decoder.graphs = True, dict(graphs)
         calls = []
         with ExitStack() as stack:
-            for model in {runner.model for runner in runners}:
+            for model in {runner.model.base_model for runner in runners}:
                 handle = model.register_forward_pre_hook(
-                    lambda module, args: calls.append((id(module), args[0].shape[1],
-                                                      torch.cuda.is_current_stream_capturing()))
+                    lambda module, args, kwargs: calls.append(
+                        (id(module), (args[0] if args else kwargs['input_ids']).shape[1],
+                         torch.cuda.is_current_stream_capturing())
+                    ),
+                    with_kwargs=True,
                 )
                 stack.callback(handle.remove)
             torch.manual_seed(index)
@@ -103,7 +106,7 @@ def check_graph_reuse(decoder, inputs, new_tokens):
         torch.testing.assert_close(torch.cuda.get_rng_state(ids.device), rng, rtol=0, atol=0)
         assert decoder.graphs == graphs and storage_addresses() == addresses
         assert decoder.graph_cache == variants
-        assert sorted(calls) == sorted((id(runner.model), ids.shape[1], False) for runner in runners)
+        assert sorted(calls) == sorted((id(runner.model.base_model), ids.shape[1], False) for runner in runners)
         print(f'    {type(decoder).__name__}: {ids.shape[1]} prompt tokens, {splits} KV splits, '
               'eager/graph tokens and RNG match; stable buffers; decode replay only', flush=True)
 

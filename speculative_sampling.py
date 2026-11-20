@@ -8,8 +8,11 @@ from utils import get_distribution, sample, sample_probabilities
 class SpeculativeDecoder:
     """Batch-one stages sharing fixed buffers and device-resident decoding state.
 
-    After prefill/append, target KV covers tokens through length - 1 and draft
-    KV through length - 2. The remaining committed tokens are consumed next round.
+    After prefill or append, if another round will run, let L be the committed
+    token count. The committed sequence is tokens[:, :L], the target KV
+    prefix is tokens[:, :L-1], and the draft KV prefix is tokens[:, :L-2].
+    Slice ends are exclusive. The next draft forward consumes the last two
+    committed tokens. Verify consumes the last committed token and the proposals.
     Call prefill once, then draft, verify, and append in that order.
     """
 
@@ -48,9 +51,12 @@ class SpeculativeDecoder:
         self.block = torch.zeros((1, self.lookahead + 1), dtype=torch.long, device=device)
         self.commit_tokens = torch.zeros_like(self.block)
         self.draft_input = torch.zeros((1, 2), dtype=torch.long, device=device)
-        self.draft_probs = torch.zeros(
-            (1, self.lookahead + 1, draft_model.config.vocab_size), device=device,
-        )
+        self.draft_probs = None
+        if self.temperature != 0:
+            self.draft_probs = torch.zeros(
+                (1, self.lookahead + 1, draft_model.config.vocab_size),
+                dtype=torch.float32, device=device,
+            )
         self.block_offsets = torch.arange(self.lookahead + 1, device=device)[None, :]
         self.catchup_offsets = torch.tensor([[-2, -1]], device=device)
 
@@ -59,21 +65,18 @@ class SpeculativeDecoder:
         splits = kv_splits_for_prompt(self.prompt_length)
         self.target.num_splits = self.proposer.num_splits = splits
         self.graphs = self.graph_cache.get(splits, {}) if self.cuda_graphs else {}
-        self.length.zero_()
         self.accepted.zero_()
-        for runner in (self.target, self.proposer):
-            if runner.cache.layers[0].is_initialized:
-                runner.rewind(self.length)
         prompt = self.prompt[:, :self.prompt_length]
         self.tokens[:, :self.prompt_length].copy_(prompt)
         logits = self.target.forward(prompt, prefill=True)[:, -1, :]
-        self.proposer.forward(prompt, prefill=True)
         self.tokens[:, self.prompt_length:self.prompt_length + 1].copy_(
             sample(logits, self.temperature)
         )
         self.length.fill_(self.prompt_length + 1)
         self.stop_length.fill_(self.target_len)
-        self.proposer.rewind(self.length - 2)
+        if self.prompt_length + 1 < self.target_len:
+            self.proposer.forward(prompt, prefill=True, logits_to_keep=None)
+            self.proposer.rewind(self.length - 2)
 
     @torch.inference_mode()
     def draft(self):
@@ -138,7 +141,7 @@ class SpeculativeDecoder:
         device = self.tokens.device
         if device.type != 'cuda':
             raise ValueError('CUDA graph capture requires CUDA')
-        if not self.target.cache.layers[0].is_initialized:
+        if not self.target.is_initialized:
             raise ValueError('Prefill before capturing decode stages')
         if self.length.item() >= self.target_len:
             return

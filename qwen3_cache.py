@@ -2,7 +2,7 @@ import math
 from functools import lru_cache
 
 import torch
-from transformers import AttentionInterface, StaticCache
+from transformers import AttentionInterface
 
 FLASH_ATTENTION_REVISION = '0b1e31f22cc994ed4cafd8bb09c23eefa798f24d'
 
@@ -25,17 +25,25 @@ def flash_attention_kernel():
 
 def cached_attention(module, query, key, value, attention_mask, *,
                      qwen3_cache, prefill, scaling, **kwargs):
+    layer_idx = module.layer_idx
+    if qwen3_cache.layers[layer_idx] is None:
+        shape = (key.shape[0], key.shape[1], qwen3_cache.capacity, key.shape[-1])
+        qwen3_cache.layers[layer_idx] = (key.new_zeros(shape), value.new_zeros(shape))
+    keys, values = qwen3_cache.layers[layer_idx]
     if prefill:
-        # Prefill is eager and only exposes the actual prompt, including length one.
-        length = query.shape[2]
+        length = key.shape[2]
+        keys[:, :, :length].copy_(key)
+        values[:, :, :length].copy_(value)
         output = qwen3_cache.kernel.flash_attn_func(
-            query.transpose(1, 2), key[:, :, :length].transpose(1, 2),
-            value[:, :, :length].transpose(1, 2), causal=True, softmax_scale=scaling,
+            query.transpose(1, 2), keys[:, :, :length].transpose(1, 2),
+            values[:, :, :length].transpose(1, 2), causal=True, softmax_scale=scaling,
         )
         return output, None
+    pre_append_length = qwen3_cache.valid_length
     output = qwen3_cache.kernel.flash_attn_with_kvcache(
-        query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2),
-        cache_seqlens=qwen3_cache.valid_length, causal=True, softmax_scale=scaling,
+        query.transpose(1, 2), keys.transpose(1, 2), values.transpose(1, 2),
+        k=key.transpose(1, 2), v=value.transpose(1, 2), cache_seqlens=pre_append_length,
+        causal=True, softmax_scale=scaling,
         num_splits=qwen3_cache.num_splits,
     )
     return output, None
@@ -77,29 +85,43 @@ class Qwen3Cache:
 
     def __init__(self, model, capacity):
         self.model = model
-        self.cache = StaticCache(config=model.config, max_cache_len=capacity)
+        self.capacity = capacity
+        self.layers = [None] * model.config.num_hidden_layers
         self.kernel = flash_attention_kernel()
         self.num_splits = 1
         self.valid_length = torch.zeros(1, dtype=torch.int32, device=model.device)
 
+    @property
+    def is_initialized(self):
+        return self.layers[0] is not None
+
     def forward(self, input_ids, logits_to_keep=1, prefill=False):
-        positions = torch.arange(input_ids.shape[1], device=input_ids.device)
-        positions = positions + self.cache.get_seq_length()
-        self.valid_length.copy_(positions[-1] + 1)
+        query_length = input_ids.shape[1]
+        positions = torch.arange(query_length, device=input_ids.device)
+        if not prefill:
+            positions.add_(self.valid_length)
         implementation = self.model.config._attn_implementation
         # Select this backend only for our forward; ordinary model calls retain theirs.
         self.model.config._attn_implementation = 'qwen3_kvcache'
         try:
-            return self.model(
-                input_ids, position_ids=positions[None, :],
+            kwargs = dict(
+                position_ids=positions[None, :],
                 attention_mask={'full_attention': None},
-                past_key_values=self.cache, use_cache=True, logits_to_keep=logits_to_keep,
+                use_cache=False,
                 qwen3_cache=self, prefill=prefill,
-            ).logits
+            )
+            if logits_to_keep is None:
+                self.model.base_model(input_ids, **kwargs)
+                logits = None
+            else:
+                logits = self.model(input_ids, logits_to_keep=logits_to_keep, **kwargs).logits
         finally:
             self.model.config._attn_implementation = implementation
+        if prefill:
+            self.valid_length.fill_(query_length)
+        else:
+            self.valid_length.add_(query_length)
+        return logits
 
     def rewind(self, length):
-        # Keep the allocation; the next forward exposes only the valid prefix.
-        for layer in self.cache.layers:
-            layer.cumulative_length.copy_(length)
+        self.valid_length.copy_(length)

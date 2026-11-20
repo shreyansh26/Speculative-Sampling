@@ -32,9 +32,6 @@ class AutoregressiveDecoder:
     def prefill(self):
         self.cache.num_splits = kv_splits_for_prompt(self.prompt_length)
         self.graphs = self.graph_cache.get(self.cache.num_splits, {}) if self.cuda_graphs else {}
-        self.length.zero_()
-        if self.cache.cache.layers[0].is_initialized:
-            self.cache.rewind(self.length)
         prompt = self.prompt[:, :self.prompt_length]
         self.tokens[:, :self.prompt_length].copy_(prompt)
         logits = self.cache.forward(prompt, prefill=True)[:, -1, :]
@@ -59,7 +56,7 @@ class AutoregressiveDecoder:
         device = self.tokens.device
         if device.type != 'cuda':
             raise ValueError('CUDA graph capture requires CUDA')
-        if not self.cache.cache.layers[0].is_initialized:
+        if not self.cache.is_initialized:
             raise ValueError('Prefill before capturing decode')
         if self.length.item() >= self.target_len:
             return

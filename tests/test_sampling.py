@@ -32,8 +32,9 @@ def full_prefix_greedy(model, prompt, length):
 def storage_pointers(decoder):
     tensors = [value for value in vars(decoder).values() if isinstance(value, torch.Tensor)]
     for runner in (decoder.target, decoder.proposer):
-        for layer in runner.cache.layers:
-            tensors.extend((layer.keys, layer.values, layer.cumulative_length))
+        tensors.append(runner.valid_length)
+        for keys, values in runner.layers:
+            tensors.extend((keys, values))
     return [tensor.data_ptr() for tensor in tensors]
 
 
@@ -103,10 +104,10 @@ class SamplingTests(unittest.TestCase):
 
                     # Poison abandoned slots to check that attention reads only the valid prefix.
                     for runner, cached_length in ((decoder.target, length - 1), (decoder.proposer, length - 2)):
-                        for layer in runner.cache.layers:
-                            self.assertEqual(layer.cumulative_length.item(), cached_length)
-                            layer.keys[:, :, cached_length:, :].fill_(100)
-                            layer.values[:, :, cached_length:, :].fill_(100)
+                        self.assertEqual(runner.valid_length.item(), cached_length)
+                        for keys, values in runner.layers:
+                            keys[:, :, cached_length:, :].fill_(100)
+                            values[:, :, cached_length:, :].fill_(100)
                     while decoder.length.item() < 19:
                         decoder.draft()
                         decoder.verify()
@@ -130,6 +131,32 @@ class SamplingTests(unittest.TestCase):
                     )
                     torch.testing.assert_close(actual, full_prefix_greedy(model, prompt, length))
                     self.assertEqual(actual.shape[1], length)
+
+    def test_one_token_skips_draft_and_next_request_initializes_it(self):
+        target = tiny_qwen()
+        draft = copy.deepcopy(target)
+        prompt = torch.tensor([[1, 5, 4]], device='cuda')
+        short_len = prompt.shape[1] + 1
+        decoder = SpeculativeDecoder(target, draft, prompt, short_len, max_seq_len=8)
+        torch.manual_seed(42)
+        expected = autoregressive_sampling(target, prompt, short_len)
+        rng = torch.cuda.get_rng_state()
+        torch.manual_seed(42)
+        draft_queries = []
+        projections = []
+        with draft.base_model.register_forward_pre_hook(
+            lambda _, args, kwargs: draft_queries.append((args[0] if args else kwargs['input_ids']).shape[1]),
+            with_kwargs=True,
+        ), draft.lm_head.register_forward_pre_hook(lambda _, args: projections.append(args[0].shape[1])):
+            torch.testing.assert_close(decoder.generate(), expected)
+            torch.testing.assert_close(torch.cuda.get_rng_state(), rng)
+            self.assertEqual(draft_queries, [])
+            self.assertFalse(decoder.proposer.is_initialized)
+
+            actual = decoder.generate(target_len=short_len + 1)
+            self.assertEqual(actual.shape[1], short_len + 1)
+            self.assertEqual(draft_queries, [3, 2, 1, 1])
+            self.assertEqual(projections, [1, 1, 1])
 
     @torch.inference_mode()
     def test_stochastic_cached_logits_match_full_prefix(self):
@@ -181,6 +208,28 @@ class SamplingTests(unittest.TestCase):
                 torch.testing.assert_close(counts / 4096, p, rtol=0, atol=0.025)
                 if torch.equal(q, p):
                     torch.testing.assert_close(bonus_counts / 4096, p, rtol=0, atol=0.025)
+
+    @patch('qwen3_cache.flash_attention_kernel')
+    def test_stochastic_verification_under_bf16_default(self, _kernel):
+        model = tiny_qwen(vocab_size=2)
+        prompt = torch.tensor([[1]], device='cuda')
+        logits = torch.tensor([0.2, 0.8], device='cuda', dtype=torch.float32).log().view(1, 1, 2)
+        default_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(torch.bfloat16)
+            decoder = SpeculativeDecoder(model, model, prompt, 5, lookahead=2)
+            greedy = SpeculativeDecoder(model, model, prompt, 5, temperature=0)
+            with patch.object(decoder.proposer, 'forward', return_value=logits), \
+                 patch.object(decoder.target, 'forward', return_value=logits.expand(1, 3, 2)), \
+                 patch.object(torch, 'rand_like', side_effect=lambda p: torch.full_like(p, 0.9995)):
+                decoder.prefill()
+                decoder.draft()
+                decoder.verify()
+            self.assertEqual(decoder.draft_probs.dtype, torch.float32)
+            self.assertEqual(decoder.accepted.item(), decoder.lookahead)
+            self.assertIsNone(greedy.draft_probs)
+        finally:
+            torch.set_default_dtype(default_dtype)
 
     def test_invalid_requests(self):
         model = tiny_qwen()

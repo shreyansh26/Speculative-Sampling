@@ -34,9 +34,10 @@ class CudaGraphTests(unittest.TestCase):
                     torch.testing.assert_close(actual, expected)
                     torch.testing.assert_close(torch.cuda.get_rng_state(), expected_rng)
                     self.assertEqual(set(graphed.graphs), {'decode'})
-                    pointers = [graphed.tokens.data_ptr(), graphed.token.data_ptr(), graphed.length.data_ptr()]
-                    for layer in graphed.cache.cache.layers:
-                        pointers.extend((layer.keys.data_ptr(), layer.values.data_ptr(), layer.cumulative_length.data_ptr()))
+                    pointers = [graphed.tokens.data_ptr(), graphed.token.data_ptr(), graphed.length.data_ptr(),
+                                graphed.cache.valid_length.data_ptr()]
+                    for keys, values in graphed.cache.layers:
+                        pointers.extend((keys.data_ptr(), values.data_ptr()))
                     if seed == 42:
                         initial_pointers = pointers
                         graph = graphed.graphs['decode']
@@ -138,10 +139,10 @@ class CudaGraphTests(unittest.TestCase):
                     length = decoder.length.item()
                     torch.testing.assert_close(decoder.tokens[:, :length], expected[:, :length])
                     for runner, cursor in ((decoder.target, length - 1), (decoder.proposer, length - 2)):
-                        for layer in runner.cache.layers:
-                            self.assertEqual(layer.cumulative_length.item(), cursor)
-                            layer.keys[:, :, cursor:, :].fill_(100)
-                            layer.values[:, :, cursor:, :].fill_(100)
+                        self.assertEqual(runner.valid_length.item(), cursor)
+                        for keys, values in runner.layers:
+                            keys[:, :, cursor:, :].fill_(100)
+                            values[:, :, cursor:, :].fill_(100)
                 self.assertEqual(storage_pointers(decoder), pointers)
 
     @torch.inference_mode()
@@ -174,8 +175,8 @@ class CudaGraphTests(unittest.TestCase):
                                 cache.valid_length.data_ptr()]
                     for runner in ((graphed.cache,) if decoder_type is AutoregressiveDecoder
                                    else (graphed.target, graphed.proposer)):
-                        for layer in runner.cache.layers:
-                            pointers.extend((layer.keys.data_ptr(), layer.values.data_ptr()))
+                        for keys, values in runner.layers:
+                            pointers.extend((keys.data_ptr(), values.data_ptr()))
                     if index == 0:
                         graphs, original_pointers = dict(graphed.graphs), pointers
                     else:
@@ -197,15 +198,13 @@ class CudaGraphTests(unittest.TestCase):
                 for query_length in (1, 2, 4):
                     prefix = (torch.arange(prompt_length, device='cuda')[None] + 1) % 31
                     query = (torch.arange(query_length, device='cuda')[None] + 5) % 31
-                    if cache.cache.layers[0].is_initialized:
-                        cache.rewind(torch.zeros((), dtype=torch.long, device='cuda'))
                     cache.num_splits = kv_splits_for_prompt(prompt_length)
                     prefill_logits = cache.forward(prefix, prefill=True)
                     reference = model(prefix, use_cache=False).logits[:, -1:]
                     torch.testing.assert_close(prefill_logits, reference, rtol=0.02, atol=0.002)
-                    for layer in cache.cache.layers:
-                        layer.keys[:, :, prompt_length:].fill_(100)
-                        layer.values[:, :, prompt_length:].fill_(100)
+                    for keys, values in cache.layers:
+                        keys[:, :, prompt_length:].fill_(100)
+                        values[:, :, prompt_length:].fill_(100)
                     expected = model(torch.cat((prefix, query), dim=1), use_cache=False).logits[:, -query_length:]
                     actual = cache.forward(query, logits_to_keep=0)
                     torch.testing.assert_close(actual, expected, rtol=0.02, atol=0.002)
