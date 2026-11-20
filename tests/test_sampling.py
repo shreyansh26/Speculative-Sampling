@@ -8,7 +8,7 @@ from transformers import Qwen3Config, Qwen3ForCausalLM
 from autoregressive_sampling import AutoregressiveDecoder, autoregressive_sampling
 from speculative_sampling import SpeculativeDecoder, speculative_sampling
 from utils import sample_probabilities
-from qwen3_cache import kv_splits_for_prompt, validate_request
+from qwen3_cache import kv_splits_for_length, kv_splits_for_range, validate_request
 
 
 def tiny_qwen(vocab_size=31, device='cuda', dtype=torch.bfloat16):
@@ -62,7 +62,7 @@ class SamplingTests(unittest.TestCase):
         for request in (prompt, prompt + 1):
             actual = decoder.generate(request)
             torch.testing.assert_close(actual, full_prefix_greedy(model, request, 12))
-            self.assertFalse(decoder.graphs)
+            self.assertFalse(decoder.active_graphs)
 
     @torch.inference_mode()
     def test_rejection_rollback_and_full_acceptance(self):
@@ -261,8 +261,13 @@ class SamplingTests(unittest.TestCase):
 
 class CachePolicyTests(unittest.TestCase):
     def test_split_boundaries(self):
-        for length, expected in ((1, 1), (511, 1), (512, 4), (4095, 4), (4096, 16), (32768, 16)):
-            self.assertEqual(kv_splits_for_prompt(length), expected)
+        for length, expected in (
+            (1, 1), (511, 1), (512, 4), (1023, 4), (1024, 8), (4095, 8), (4096, 16), (32768, 16),
+        ):
+            self.assertEqual(kv_splits_for_length(length), expected)
+        self.assertEqual(list(kv_splits_for_range(511, 4096)), [1, 4, 8])
+        self.assertEqual(list(kv_splits_for_range(512, 4097)), [4, 8, 16])
+        self.assertEqual(list(kv_splits_for_range(512, 512)), [])
 
     def test_cpu_is_rejected(self):
         model = tiny_qwen(device='cpu')

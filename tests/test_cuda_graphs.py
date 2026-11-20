@@ -1,11 +1,12 @@
 import copy
 import unittest
+from unittest.mock import patch
 
 import torch
 
 from autoregressive_sampling import AutoregressiveDecoder, autoregressive_sampling
 from benchmarks.benchmark import check_graph_reuse
-from qwen3_cache import Qwen3Cache, kv_splits_for_prompt
+from qwen3_cache import KV_SPLIT_BUCKETS, Qwen3Cache, kv_splits_for_length
 from speculative_sampling import SpeculativeDecoder, speculative_sampling
 from tests.test_sampling import full_prefix_greedy, storage_pointers, tiny_qwen
 
@@ -33,17 +34,17 @@ class CudaGraphTests(unittest.TestCase):
                     actual = graphed.generate(changed_prompt)
                     torch.testing.assert_close(actual, expected)
                     torch.testing.assert_close(torch.cuda.get_rng_state(), expected_rng)
-                    self.assertEqual(set(graphed.graphs), {'decode'})
+                    self.assertEqual(set(graphed.active_graphs), {'decode'})
                     pointers = [graphed.tokens.data_ptr(), graphed.token.data_ptr(), graphed.length.data_ptr(),
                                 graphed.cache.valid_length.data_ptr()]
                     for keys, values in graphed.cache.layers:
                         pointers.extend((keys.data_ptr(), values.data_ptr()))
                     if seed == 42:
                         initial_pointers = pointers
-                        graph = graphed.graphs['decode']
+                        graph = graphed.active_graphs['decode']
                     else:
                         self.assertEqual(pointers, initial_pointers)
-                        self.assertIs(graphed.graphs['decode'], graph)
+                        self.assertIs(graphed.active_graphs['decode'], graph)
                 calls = []
                 handle = model.register_forward_pre_hook(
                     lambda module, args: calls.append((args[0].shape[1], torch.cuda.is_current_stream_capturing()))
@@ -65,7 +66,7 @@ class CudaGraphTests(unittest.TestCase):
             decoder.capture_decode()
         decoder.generate()
         decoder.capture_decode()
-        self.assertFalse(decoder.graphs)
+        self.assertFalse(decoder.active_graphs)
         self.assertEqual(decoder.capture_seconds, 0)
 
     @torch.inference_mode()
@@ -88,13 +89,13 @@ class CudaGraphTests(unittest.TestCase):
                         actual = graphed.generate(changed_prompt)
                         torch.testing.assert_close(actual, expected)
                         torch.testing.assert_close(torch.cuda.get_rng_state(), expected_rng)
-                        self.assertEqual(set(graphed.graphs), {'draft', 'verify', 'append'})
+                        self.assertEqual(set(graphed.active_graphs), {'draft', 'verify', 'append'})
                         if seed == 42:
                             pointers = storage_pointers(graphed)
-                            graphs = dict(graphed.graphs)
+                            graphs = dict(graphed.active_graphs)
                         else:
                             self.assertEqual(storage_pointers(graphed), pointers)
-                            self.assertEqual(graphed.graphs, graphs)
+                            self.assertEqual(graphed.active_graphs, graphs)
 
                     calls = []
                     handle = target.register_forward_pre_hook(
@@ -178,9 +179,9 @@ class CudaGraphTests(unittest.TestCase):
                         for keys, values in runner.layers:
                             pointers.extend((keys.data_ptr(), values.data_ptr()))
                     if index == 0:
-                        graphs, original_pointers = dict(graphed.graphs), pointers
+                        graphs, original_pointers = dict(graphed.active_graphs), pointers
                     else:
-                        self.assertEqual(graphed.graphs, graphs)
+                        self.assertEqual(graphed.active_graphs, graphs)
                         self.assertEqual(pointers, original_pointers)
                 with self.assertRaises(ValueError):
                     graphed.generate(initial, target_len=49)
@@ -198,7 +199,7 @@ class CudaGraphTests(unittest.TestCase):
                 for query_length in (1, 2, 4):
                     prefix = (torch.arange(prompt_length, device='cuda')[None] + 1) % 31
                     query = (torch.arange(query_length, device='cuda')[None] + 5) % 31
-                    cache.num_splits = kv_splits_for_prompt(prompt_length)
+                    cache.num_splits = kv_splits_for_length(prompt_length)
                     prefill_logits = cache.forward(prefix, prefill=True)
                     reference = model(prefix, use_cache=False).logits[:, -1:]
                     torch.testing.assert_close(prefill_logits, reference, rtol=0.02, atol=0.002)
@@ -212,18 +213,74 @@ class CudaGraphTests(unittest.TestCase):
                     self.assertEqual(model.config._attn_implementation, 'sdpa')
 
     @torch.inference_mode()
+    def test_crossing_split_boundaries_replays_prepared_graphs_and_matches_logits(self):
+        target = tiny_qwen()
+        draft = copy.deepcopy(target)
+        for cls, models, stage, query_length in (
+            (AutoregressiveDecoder, (target,), 'decode', 1),
+            (SpeculativeDecoder, (target, draft), 'verify', 4),
+        ):
+            for (_, old_split), (boundary, new_split) in zip(KV_SPLIT_BUCKETS, KV_SPLIT_BUCKETS[1:]):
+                with self.subTest(decoder=cls.__name__, boundary=boundary):
+                    prompt = torch.arange(boundary - 3, device='cuda')[None] % target.config.vocab_size
+                    for graphed in (False, True):
+                        decoder = cls(*models, prompt, boundary + 8, temperature=0, cuda_graphs=graphed)
+                        runner = decoder.cache if cls is AutoregressiveDecoder else decoder.target
+                        logits = torch.empty((1, query_length, target.config.vocab_size),
+                                             device='cuda', dtype=target.dtype)
+                        calls, splits, scores = [], [], []
+                        run_stage = getattr(decoder, stage)
+
+                        def save_logits(_, args, output):
+                            calls.append(args[0].shape[1])
+                            if args[0].shape[1] == query_length:
+                                logits.copy_(output.logits)
+
+                        def observe():
+                            if graphed and not decoder.active_graphs:
+                                return run_stage()
+                            split = runner.num_splits
+                            self.assertEqual(split, kv_splits_for_length(decoder.length.item()))
+                            if graphed:
+                                self.assertEqual(set(decoder.graphs_by_split), {old_split, new_split})
+                                self.assertIs(decoder.active_graphs, decoder.graphs_by_split[split])
+                            run_stage()
+                            splits.append(split)
+                            scores.append(logits.clone())
+
+                        with target.register_forward_hook(save_logits), patch.object(decoder, stage, observe):
+                            tokens = decoder.generate()
+                            self.assertEqual(list(dict.fromkeys(splits)), [old_split, new_split])
+                            if not graphed:
+                                expected = tokens, splits.copy(), torch.cat(scores, dim=1)
+                                continue
+                            torch.testing.assert_close(tokens, expected[0])
+                            self.assertEqual(splits, expected[1])
+                            torch.testing.assert_close(torch.cat(scores, dim=1), expected[2], rtol=0, atol=0)
+
+                            variants = dict(decoder.graphs_by_split)
+                            calls.clear()
+                            splits.clear()
+                            scores.clear()
+                            torch.testing.assert_close(decoder.generate(), expected[0])
+                            self.assertEqual(calls, [prompt.shape[1]])
+                            self.assertEqual(splits, expected[1])
+                            self.assertEqual(decoder.graphs_by_split, variants)
+                            torch.testing.assert_close(torch.cat(scores, dim=1), expected[2], rtol=0, atol=0)
+
+    @torch.inference_mode()
     def test_long_context_replay(self):
         target = tiny_qwen().to(device='cuda', dtype=torch.bfloat16)
         draft = copy.deepcopy(target)
         draft.lm_head.weight.neg_()
         inputs = [(torch.arange(length, device='cuda')[None] % 30 + 1)
-                  for length in (511, 512, 1024, 4095, 4096, 8192, 32768)]
+                  for length in (509, 512, 1021, 1024, 4093, 4096, 8192, 32768)]
         for temperature in (0, 0.5):
             for cls, models in ((AutoregressiveDecoder, (target,)), (SpeculativeDecoder, (target, draft))):
                 decoder = cls(*models, inputs[0], 1032, temperature=temperature,
                               max_seq_len=32776, cuda_graphs=True)
                 check_graph_reuse(decoder, inputs, new_tokens=8)
-                self.assertEqual(set(decoder.graph_cache), {1, 4, 16})
+                self.assertEqual(set(decoder.graphs_by_split), {1, 4, 8, 16})
 
     def test_short_output_budget(self):
         model = tiny_qwen().cuda()
@@ -239,7 +296,7 @@ class CudaGraphTests(unittest.TestCase):
             decoder.capture_stages()
         decoder.generate()
         decoder.capture_stages()
-        self.assertFalse(decoder.graphs)
+        self.assertFalse(decoder.active_graphs)
         self.assertEqual(decoder.capture_seconds, 0)
 
 

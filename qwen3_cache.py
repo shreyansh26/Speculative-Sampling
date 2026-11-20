@@ -7,14 +7,23 @@ from transformers import AttentionInterface
 FLASH_ATTENTION_REVISION = '0b1e31f22cc994ed4cafd8bb09c23eefa798f24d'
 
 
-def kv_splits_for_prompt(prompt_length):
-    """Choose once per request; fixed split counts are safe to capture and reuse."""
-    # shortcut: H100-oriented thresholds; retune for other GPUs or long generations.
-    if prompt_length < 512:
-        return 1
-    if prompt_length < 4096:
-        return 4
-    return 16
+# shortcut: H100-oriented thresholds; retune for other GPUs.
+KV_SPLIT_BUCKETS = ((1, 1), (512, 4), (1024, 8), (4096, 16))
+
+
+def kv_splits_for_length(length):
+    for minimum, splits in reversed(KV_SPLIT_BUCKETS):
+        if length >= minimum:
+            return splits
+
+
+def kv_splits_for_range(start, stop):
+    """Yield split counts used at committed lengths in [start, stop)."""
+    if start < stop:
+        yield kv_splits_for_length(start)
+        for minimum, splits in KV_SPLIT_BUCKETS:
+            if start < minimum < stop:
+                yield splits
 
 
 @lru_cache(maxsize=1)

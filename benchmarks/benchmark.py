@@ -8,7 +8,7 @@ import time
 from unittest.mock import patch
 import torch
 import transformers
-from qwen3_cache import FLASH_ATTENTION_REVISION, kv_splits_for_prompt
+from qwen3_cache import FLASH_ATTENTION_REVISION, kv_splits_for_range
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from autoregressive_sampling import AutoregressiveDecoder
 from speculative_sampling import SpeculativeDecoder
@@ -59,8 +59,7 @@ def check_graph_reuse(decoder, inputs, new_tokens):
     short = inputs[0][:, :1]
     decoder.generate(short, target_len=3)
     expected_stages = {'decode'} if isinstance(decoder, AutoregressiveDecoder) else {'draft', 'verify', 'append'}
-    assert set(decoder.graphs) == expected_stages
-    variants = dict(decoder.graph_cache)
+    assert set(decoder.active_graphs) == expected_stages
     runners = ((decoder.cache,) if isinstance(decoder, AutoregressiveDecoder)
                else (decoder.target, decoder.proposer))
 
@@ -74,21 +73,19 @@ def check_graph_reuse(decoder, inputs, new_tokens):
 
     addresses = storage_addresses()
     for index, ids in enumerate([*inputs, short]):
-        splits = kv_splits_for_prompt(ids.shape[1])
-        if splits not in variants:
-            capture_length = {1: 1, 4: 512, 16: 4096}[splits]
-            decoder.generate(ids[:, :capture_length], target_len=capture_length + 2)
-            variants[splits] = decoder.graph_cache[splits]
-        graphs = variants[splits]
-        assert set(graphs) == expected_stages
         target_len = ids.shape[1] + new_tokens
+        splits = tuple(kv_splits_for_range(ids.shape[1] + 1, target_len))
+        if any(split not in decoder.graphs_by_split for split in splits):
+            decoder.generate(ids, target_len=target_len)
+        variants = dict(decoder.graphs_by_split)
+        assert all(set(variants[split]) == expected_stages for split in splits)
         torch.manual_seed(index)
-        decoder.cuda_graphs, decoder.graphs = False, {}
+        decoder.cuda_graphs = False
         try:
             expected = decoder.generate(ids, target_len=target_len)
             rng = torch.cuda.get_rng_state(ids.device)
         finally:
-            decoder.cuda_graphs, decoder.graphs = True, dict(graphs)
+            decoder.cuda_graphs = True
         calls = []
         with ExitStack() as stack:
             for model in {runner.model.base_model for runner in runners}:
@@ -104,10 +101,11 @@ def check_graph_reuse(decoder, inputs, new_tokens):
             actual = decoder.generate(ids, target_len=target_len)
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         torch.testing.assert_close(torch.cuda.get_rng_state(ids.device), rng, rtol=0, atol=0)
-        assert decoder.graphs == graphs and storage_addresses() == addresses
-        assert decoder.graph_cache == variants
+        assert any(decoder.active_graphs is variants[split] for split in splits)
+        assert storage_addresses() == addresses
+        assert decoder.graphs_by_split == variants
         assert sorted(calls) == sorted((id(runner.model.base_model), ids.shape[1], False) for runner in runners)
-        print(f'    {type(decoder).__name__}: {ids.shape[1]} prompt tokens, {splits} KV splits, '
+        print(f'    {type(decoder).__name__}: {ids.shape[1]} prompt tokens, KV splits {splits}, '
               'eager/graph tokens and RNG match; stable buffers; decode replay only', flush=True)
 
 
@@ -249,9 +247,11 @@ def benchmark_experiment(target, draft, inputs, temperature, new_tokens, repeats
     row['max_seq_len'] = max_seq_len
     row['spec_graph_setup_s'] = decoder.capture_seconds
     row['ar_graph_setup_s'] = ar_decoder.capture_seconds
-    row['spec_graph_count'] = sum(map(len, decoder.graph_cache.values()))
-    row['ar_graph_count'] = sum(map(len, ar_decoder.graph_cache.values()))
-    row['kv_splits'] = ','.join(str(splits) for splits in sorted({kv_splits_for_prompt(ids.shape[1]) for ids in inputs}))
+    row['spec_graph_count'] = sum(map(len, decoder.graphs_by_split.values()))
+    row['ar_graph_count'] = sum(map(len, ar_decoder.graphs_by_split.values()))
+    splits = {split for ids in inputs
+              for split in kv_splits_for_range(ids.shape[1] + 1, ids.shape[1] + new_tokens)}
+    row['kv_splits'] = ','.join(map(str, sorted(splits)))
     row['graph_reuse_checked'] = check_graphs
     row['peak_allocated_gib'] = torch.cuda.max_memory_allocated() / 2**30
     return row
